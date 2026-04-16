@@ -4,33 +4,33 @@
 
 @theme inline {
     --font-sans: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    --color-background: #f2f4f7;
-    --color-foreground: #1a1c1e;
-    --color-card: #ffffff;
-    --color-card-foreground: #1a1c1e;
-    --color-popover: #ffffff;
-    --color-popover-foreground: #1a1c1e;
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
     --color-primary: #006041;
     --color-primary-foreground: #ffffff;
-    --color-secondary: #f8fafc;
-    --color-secondary-foreground: #1a1c1e;
-    --color-muted: #f8fafc;
-    --color-muted-foreground: #64748b;
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
     --color-accent: #008250;
     --color-accent-foreground: #ffffff;
     --color-destructive: #ef4444;
-    --color-border: #e2e8f0;
-    --color-input: #e2e8f0;
+    --color-border: var(--border);
+    --color-input: var(--input);
     --color-ring: #008250;
     --radius-theme: 8px;
 
     --color-tally-green: #006041;
     --color-accent-green: #008250;
-    --color-bg-main: #f2f4f7;
-    --color-card-bg: #ffffff;
-    --color-text-dark: #1a1c1e;
-    --color-text-muted: #64748b;
-    --color-border-theme: #e2e8f0;
+    --color-bg-main: var(--background);
+    --color-card-bg: var(--card);
+    --color-text-dark: var(--foreground);
+    --color-text-muted: var(--muted-foreground);
+    --color-border-theme: var(--border);
 }
 
 :root {
@@ -44,7 +44,7 @@
     --primary-foreground: #ffffff;
     --secondary: #f8fafc;
     --secondary-foreground: #1a1c1e;
-    --muted: #f8fafc;
+    --muted: #f1f5f9;
     --muted-foreground: #64748b;
     --accent: #008250;
     --accent-foreground: #ffffff;
@@ -53,6 +53,44 @@
     --input: #e2e8f0;
     --ring: #008250;
     --radius: 8px;
+}
+
+.dark {
+    --background: #0f172a;
+    --foreground: #f8fafc;
+    --card: #1e293b;
+    --card-foreground: #f8fafc;
+    --popover: #1e293b;
+    --popover-foreground: #f8fafc;
+    --secondary: #334155;
+    --secondary-foreground: #f8fafc;
+    --muted: #1e293b;
+    --muted-foreground: #94a3b8;
+    --border: #334155;
+    --input: #334155;
+}
+
+body {
+  background-image: 
+    linear-gradient(to right, #00000005 1px, transparent 1px),
+    linear-gradient(to bottom, #00000005 1px, transparent 1px);
+  background-size: 24px 24px;
+  @apply transition-colors duration-300;
+}
+
+.dark body {
+  background-image: 
+    linear-gradient(to right, #ffffff05 1px, transparent 1px),
+    linear-gradient(to bottom, #ffffff05 1px, transparent 1px);
+}
+
+/* Simulation scaling for mobile */
+@media (max-width: 768px) {
+  .tally-sim-screen {
+    transform: scale(calc(100vw / 420));
+    transform-origin: top center;
+    min-height: 650px !important;
+  }
 }
 
 
@@ -73,17 +111,25 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--muted);
 }
 
 ::-webkit-scrollbar-thumb {
   background: #006041;
   border-radius: 10px;
-  border: 2px solid #f1f1f1;
+  border: 2px solid var(--muted);
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: #008250;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  border-color: #1e293b;
 }
 
 /* Force scrollbar visibility for elements with overflow */
@@ -92,9 +138,18 @@
   scrollbar-color: #006041 #f1f1f1;
 }
 
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 /* Custom theme classes */
 .card-title-bar {
-  @apply flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400 mb-4 pb-2 border-b border-slate-100;
+  @apply flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400 mb-4 pb-2 border-b border-border;
 }
 
 .card-title-bar::before {
@@ -103,7 +158,7 @@
 }
 
 .path-display {
-  @apply bg-slate-900 text-sky-400 p-4 rounded-lg font-mono text-[13px] border border-slate-800 shadow-inner leading-relaxed;
+  @apply bg-slate-900 text-sky-400 p-3 md:p-4 rounded-lg font-mono text-[12px] md:text-[13px] border border-slate-800 shadow-inner leading-relaxed overflow-x-auto;
 }
 
 .path-display::before {
@@ -112,7 +167,7 @@
 }
 
 .learning-mode-box {
-  @apply bg-green-50/50 border-l-4 border-tally-green p-5 rounded-r-lg shadow-sm my-6;
+  @apply bg-green-50/50 border-l-4 border-tally-green p-3 md:p-5 rounded-r-lg shadow-sm my-4 md:my-6;
 }
 
 .learning-mode-box strong {

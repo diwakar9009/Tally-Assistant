@@ -15,6 +15,10 @@ import {
   HelpCircle,
   Calculator,
   FileText,
+  MessageSquare,
+  LayoutDashboard,
+  GraduationCap,
+  Keyboard,
   ChevronRight,
   Loader2,
   Trash2,
@@ -29,7 +33,12 @@ import {
   ArrowDown,
   Copy,
   Check,
-  Info
+  CheckCheck,
+  ChevronUp,
+  ChevronDown,
+  Info,
+  Sun,
+  Moon
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { analyzeTransaction } from './lib/gemini';
@@ -68,6 +77,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('chat');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [collapsedMessages, setCollapsedMessages] = useState<Set<string>>(new Set());
+
+  const toggleCollapse = (id: string) => {
+    setCollapsedMessages(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -78,23 +97,59 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [simView, setSimView] = useState<'gateway' | 'voucher' | 'report'>('gateway');
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('tally-theme');
+      if (saved) return saved === 'dark';
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('tally-theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('tally-theme', 'light');
+    }
+  }, [darkMode]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Try both selectors to be safe
     const viewport = scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') || 
                      scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
     
     if (viewport) {
-      console.log("Scrolling viewport to bottom. ScrollHeight:", viewport.scrollHeight);
-      viewport.scrollTop = viewport.scrollHeight;
+      const isNearBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 200;
+      // Auto-scroll to bottom only if user is already near bottom or it's the first message
+      if (isNearBottom || messages.length <= 2) {
+        viewport.scrollTo({ 
+          top: viewport.scrollHeight, 
+          behavior: messages.length <= 2 ? 'auto' : 'smooth' 
+        });
+      }
     }
-    
-    // Fallback: scrollIntoView on the end ref
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const scrollToBottom = () => {
+    const viewport = scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') || 
+                     scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+    if (viewport) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' });
+    }
+  };
+
+  const scrollToTop = () => {
+    const viewport = scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') || 
+                     scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+    if (viewport) {
+      viewport.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
   const handleSend = async () => {
     console.log("handleSend triggered. Input:", input, "Image:", !!selectedImage);
@@ -218,17 +273,6 @@ export default function App() {
     toast.success('Advice exported as text file');
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const scrollToTop = () => {
-    const scrollContainer = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
-    if (scrollContainer) {
-      scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-  };
-
   const lastAssistantMessage = useMemo(() => {
     return [...messages].reverse().find(m => m.role === 'assistant')?.content || '';
   }, [messages]);
@@ -268,7 +312,7 @@ export default function App() {
   }, [lastAssistantMessage]);
 
   return (
-    <div className="flex h-screen bg-bg-main font-sans text-text-dark overflow-hidden">
+    <div className="flex h-[100dvh] bg-bg-main font-sans text-text-dark overflow-hidden">
       <Toaster position="top-center" />
       
       {(typeof process === 'undefined' || !process.env.GEMINI_API_KEY) && (
@@ -278,9 +322,22 @@ export default function App() {
       )}
 
       {/* Sidebar - Geometric Balance: Responsive width and visibility */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] md:hidden"
+          />
+        )}
+      </AnimatePresence>
+
       <aside className={cn(
-        "bg-white border-r border-border-theme flex flex-col transition-all duration-300 z-20",
-        isSidebarOpen ? "w-72 fixed inset-y-0 left-0 md:relative" : "w-0 -translate-x-full md:hidden"
+        "bg-card border-r border-border flex flex-col transition-all duration-300 z-[110] shadow-2xl overflow-hidden shadow-[10px_0_30px_rgba(0,0,0,0.1)]",
+        "fixed inset-y-0 left-0 w-[85%] sm:w-72 md:relative md:w-72 md:translate-x-0 h-full",
+        isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
       )}>
         <div className="p-6 border-b border-border-theme bg-tally-green text-white shrink-0">
           <div className="flex items-center justify-between">
@@ -301,65 +358,101 @@ export default function App() {
         </div>
         
         <ScrollArea className="flex-1 px-4 py-4">
-          <div className="space-y-6">
+          <div className="space-y-8">
             <div>
-              <h2 className="card-title-bar px-2">Quick Actions</h2>
-              <div className="space-y-1">
+              <h2 className="card-title-bar px-2 mb-3">Accounting Menu</h2>
+              <div className="space-y-1.5 px-1">
                 <Button 
                   variant="ghost" 
-                  className={cn("w-full justify-start gap-3 h-10 font-bold text-xs uppercase tracking-wider hover:bg-bg-main", activeTab === 'chat' && "bg-bg-main text-tally-green")}
-                  onClick={() => setActiveTab('chat')}
+                  className={cn(
+                    "w-full justify-start gap-3 h-11 px-3 font-black text-[11px] uppercase tracking-wider transition-all duration-200 rounded-md hover:bg-bg-main", 
+                    activeTab === 'chat' ? "bg-bg-main text-tally-green border-r-4 border-tally-green shadow-sm" : "text-text-muted"
+                  )}
+                  onClick={() => {
+                    setActiveTab('chat');
+                    if (window.innerWidth < 768) setIsSidebarOpen(false);
+                  }}
                 >
-                  <Plus className="w-4 h-4" /> New Entry
+                  <MessageSquare className="w-4 h-4" /> Transactions
                 </Button>
                 <Button 
                   variant="ghost" 
-                  className={cn("w-full justify-start gap-3 h-10 font-bold text-xs uppercase tracking-wider hover:bg-bg-main", learningMode && "text-tally-green")}
+                  className={cn(
+                    "w-full justify-start gap-3 h-11 px-3 font-black text-[11px] uppercase tracking-wider transition-all duration-200 rounded-md hover:bg-bg-main", 
+                    activeTab === 'simulate' ? "bg-bg-main text-tally-green border-r-4 border-tally-green shadow-sm" : "text-text-muted"
+                  )}
+                  onClick={() => {
+                    setActiveTab('simulate');
+                    if (window.innerWidth < 768) setIsSidebarOpen(false);
+                  }}
+                >
+                  <LayoutDashboard className="w-4 h-4" /> Simulation View
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  className={cn(
+                    "w-full justify-start gap-3 h-11 px-3 font-black text-[11px] uppercase tracking-wider transition-all duration-200 rounded-md hover:bg-bg-main", 
+                    learningMode ? "text-tally-green bg-green-50" : "text-text-muted"
+                  )}
                   onClick={() => setLearningMode(!learningMode)}
                 >
-                  <BookOpen className="w-4 h-4" /> Learning: {learningMode ? 'ON' : 'OFF'}
-                </Button>
-                <Button 
-                  variant="ghost" 
-                  className={cn("w-full justify-start gap-3 h-10 font-bold text-xs uppercase tracking-wider hover:bg-bg-main", activeTab === 'simulate' && "bg-bg-main text-tally-green")}
-                  onClick={() => setActiveTab('simulate')}
-                >
-                  <Monitor className="w-4 h-4" /> Simulation
+                  <GraduationCap className={cn("w-4 h-4", learningMode && "animate-bounce")} /> Learning Mode: {learningMode ? 'ON' : 'OFF'}
                 </Button>
               </div>
             </div>
 
             <div>
-              <h2 className="card-title-bar px-2">Recent History</h2>
-              <div className="space-y-2 px-2">
+              <h2 className="card-title-bar px-2 mb-3">Recent Vouchers</h2>
+              <div className="space-y-2 px-3">
                 {messages.filter(m => m.role === 'user').slice(-5).map(m => (
-                  <div key={m.id} className="text-[13px] text-text-muted truncate hover:text-tally-green cursor-pointer transition-colors flex items-center gap-2 font-medium">
-                    <History className="w-3 h-3 opacity-50" />
-                    {m.content || "Image Voucher"}
+                  <div key={m.id} className="text-[12px] text-text-muted truncate hover:text-tally-green cursor-pointer transition-colors flex items-center gap-3 font-bold group">
+                    <FileText className="w-3.5 h-3.5 opacity-40 group-hover:opacity-100 group-hover:text-tally-green transition-all" />
+                    <span className="truncate">{m.content || "Image Voucher"}</span>
                   </div>
                 ))}
+                {messages.filter(m => m.role === 'user').length === 0 && (
+                  <div className="text-[11px] text-text-muted/50 italic px-2">No recent entries</div>
+                )}
               </div>
             </div>
           </div>
         </ScrollArea>
 
-        <div className="p-4 border-t border-border-theme space-y-2">
-          <Button variant="ghost" className="w-full justify-start gap-3 text-text-muted text-xs font-bold uppercase tracking-wider" onClick={clearHistory}>
-            <Trash2 className="w-4 h-4" /> Clear History
+        <div className="p-4 border-t border-border-theme space-y-1 bg-gray-50/50">
+          <Button 
+            variant="ghost" 
+            className="w-full justify-start gap-3 h-10 text-text-muted text-[10px] font-black uppercase tracking-widest hover:text-red-600 transition-colors" 
+            onClick={clearHistory}
+          >
+            <Trash2 className="w-4 h-4" /> Reset History
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3 text-text-muted text-xs font-bold uppercase tracking-wider">
-            <Settings className="w-4 h-4" /> Settings
+          <Button 
+            variant="ghost" 
+            className="w-full justify-start gap-3 h-10 text-text-muted text-[10px] font-black uppercase tracking-widest hover:text-tally-green transition-colors"
+          >
+            <Settings className="w-4 h-4" /> AI Preferences
           </Button>
-          <div className="p-4 border-t border-border-theme">
-            <Button 
-              variant="outline" 
-              className="w-full justify-start gap-3 text-sm font-bold uppercase tracking-wider"
-              onClick={() => setShowShortcuts(true)}
-            >
-              <Calculator className="w-4 h-4" />
-              Tally Shortcuts
-            </Button>
-          </div>
+          <Button 
+            variant="outline" 
+            className="w-full justify-start gap-3 h-11 mt-2 text-[11px] font-black uppercase tracking-widest bg-white dark:bg-slate-800 border-2 border-tally-green/10 hover:border-tally-green hover:text-tally-green transition-all active:scale-95 shadow-sm"
+            onClick={() => setShowShortcuts(true)}
+          >
+            <Keyboard className="w-4 h-4" /> Tally Keys
+          </Button>
+
+          <Button 
+            variant="ghost" 
+            className="w-full justify-between items-center h-10 px-3 mt-2 text-text-muted text-[10px] font-black uppercase tracking-widest hover:bg-bg-main"
+            onClick={() => setDarkMode(!darkMode)}
+          >
+            <div className="flex items-center gap-3">
+              {darkMode ? <Sun className="w-4 h-4 text-yellow-500" /> : <Moon className="w-4 h-4 text-blue-500" />}
+              {darkMode ? 'Light Mode' : 'Dark Mode'}
+            </div>
+            <div className={cn("w-8 h-4 rounded-full relative transition-colors", darkMode ? "bg-tally-green" : "bg-slate-300 dark:bg-slate-600")}>
+              <div className={cn("absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all shadow-md", darkMode ? "left-[18px]" : "left-0.5")} />
+            </div>
+          </Button>
         </div>
       </aside>
 
@@ -406,41 +499,38 @@ export default function App() {
       </AnimatePresence>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col relative bg-bg-main">
+      <main className="flex-1 flex flex-col min-w-0 bg-bg-main overflow-hidden">
         {/* Header - Geometric Balance: Green with accent border */}
-        <header className="h-16 bg-tally-green border-b-4 border-accent-green flex items-center justify-between px-4 md:px-6 z-10 text-white shadow-md">
-          <div className="flex items-center gap-3">
+        <header className="shrink-0 h-14 md:h-16 bg-tally-green border-b-4 border-accent-green flex items-center justify-between px-3 md:px-6 z-20 text-white shadow-md">
+          <div className="flex items-center gap-2 md:gap-3">
             <Button 
               variant="ghost" 
               size="icon" 
-              className="text-white hover:bg-white/10"
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="text-white hover:bg-white/10 h-9 w-9"
+              onClick={() => setIsSidebarOpen(true)}
             >
-              <Menu className="w-6 h-6" />
+              <Menu className="w-5 h-5 md:w-6 md:h-6" />
             </Button>
-            <div className="hidden sm:block">
-              <h2 className="font-bold text-base md:text-[20px] leading-none tracking-wide uppercase">Tally AI Assistant</h2>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="w-2 h-2 bg-accent-green rounded-full animate-pulse" />
-                <span className="text-[10px] md:text-[12px] text-white/70 font-bold uppercase tracking-widest">Active Now</span>
+            <div className="flex flex-col">
+              <h2 className="font-bold text-sm md:text-lg leading-none tracking-wide uppercase">Tally AI</h2>
+              <div className="flex items-center gap-1 mt-0.5 md:mt-1">
+                <span className="w-1.5 h-1.5 bg-accent-green rounded-full animate-pulse" />
+                <span className="text-[8px] md:text-[10px] text-white/80 font-bold uppercase tracking-widest">Live</span>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex">
-              <TabsList className="bg-black/20 p-1 h-9 border border-white/10">
-                <TabsTrigger value="chat" className="rounded-sm px-3 md:px-4 text-[10px] md:text-xs font-bold uppercase tracking-wider data-[state=active]:bg-white data-[state=active]:text-tally-green">Chat</TabsTrigger>
-                <TabsTrigger value="simulate" className="rounded-sm px-3 md:px-4 text-[10px] md:text-xs font-bold uppercase tracking-wider data-[state=active]:bg-white data-[state=active]:text-tally-green">Sim</TabsTrigger>
-              </TabsList>
-            </Tabs>
-            <Button variant="ghost" size="icon" className="rounded-full text-white hover:bg-white/10 hidden sm:flex">
-              <HelpCircle className="w-5 h-5" />
-            </Button>
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="flex">
+                <TabsList className="bg-black/30 p-0.5 h-8 md:h-9 border border-white/10">
+                  <TabsTrigger value="chat" className="rounded-sm px-2.5 md:px-4 text-[10px] md:text-xs font-black uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:text-tally-green transition-all">CHAT</TabsTrigger>
+                  <TabsTrigger value="simulate" className="rounded-sm px-2.5 md:px-4 text-[10px] md:text-xs font-black uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:text-tally-green transition-all">SIM</TabsTrigger>
+                </TabsList>
+              </Tabs>
           </div>
         </header>
 
         {/* Content Area */}
-        <div className="flex-1 relative overflow-hidden">
+        <div className="flex-1 relative overflow-hidden flex flex-col">
           <AnimatePresence mode="wait">
             {activeTab === 'chat' ? (
               <motion.div 
@@ -450,8 +540,8 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="h-full flex flex-col"
               >
-                <ScrollArea ref={scrollAreaRef} className="flex-1 p-4 md:p-8 relative group">
-                  <div className="max-w-4xl mx-auto space-y-8 pb-32">
+                <ScrollArea ref={scrollAreaRef} className="flex-1 relative group bg-bg-main overflow-hidden">
+                  <div className="max-w-4xl mx-auto space-y-4 md:space-y-8 p-4 md:p-8 pb-48 md:pb-32">
                     {messages.map((message, index) => {
                       console.log(`Rendering message ${index}:`, message.role, "Length:", message.content.length);
                       return (
@@ -460,21 +550,29 @@ export default function App() {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         className={cn(
-                          "flex flex-col",
+                          "w-full flex flex-col",
                           message.role === 'user' ? "items-end" : "items-start"
                         )}
                       >
                         <div className={cn(
-                          "max-w-[95%] md:max-w-[90%] rounded-lg px-6 py-6 shadow-md border",
+                          "max-w-[100%] md:max-w-[90%] rounded-3xl px-4 py-4 md:px-6 md:py-6 shadow-md border group/bubble relative",
                           message.role === 'user' 
-                            ? "bg-white border-border-theme text-text-dark italic" 
-                            : "bg-white border-border-theme text-text-dark"
+                            ? "bg-card border-border text-foreground italic ml-auto rounded-tr-none shadow-sm" 
+                            : "bg-card border-border text-foreground mr-auto rounded-tl-none shadow-sm"
                         )}>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="absolute -top-3 right-4 h-6 w-6 rounded-full bg-background border shadow-sm opacity-0 group-hover/bubble:opacity-100 transition-opacity z-10"
+                            onClick={() => toggleCollapse(message.id)}
+                          >
+                            {collapsedMessages.has(message.id) ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+                          </Button>
                           {message.role === 'user' && (
                             <div className="card-title-bar">User Input</div>
                           )}
                           {message.role === 'assistant' && (
-                            <div className="flex items-center justify-between mb-6 pb-3 border-b-2 border-slate-100">
+                            <div className="flex items-center justify-between mb-3 md:mb-6 pb-2 md:pb-3 border-b-2 border-border/50">
                               <div className="card-title-bar mb-0 border-none pb-0">Detailed Tally Analysis</div>
                               <div className="flex gap-2">
                                 <Button 
@@ -496,85 +594,99 @@ export default function App() {
                               </div>
                             </div>
                           )}
-                          {message.image && (
-                            <div className="mb-4">
-                              <div className="card-title-bar">Attached Voucher</div>
-                              <img 
-                                src={message.image} 
-                                alt="Voucher" 
-                                className="rounded-md max-h-80 object-cover border border-border-theme" 
-                                referrerPolicy="no-referrer"
-                              />
+                          <motion.div 
+                            initial={false}
+                            animate={{ height: collapsedMessages.has(message.id) ? 60 : 'auto' }}
+                            className="overflow-hidden relative"
+                          >
+                            {message.image && (
+                              <div className="mb-4">
+                                <div className="card-title-bar">Attached Voucher</div>
+                                <img 
+                                  src={message.image} 
+                                  alt="Voucher" 
+                                  className="rounded-md max-h-80 object-cover border border-border-theme" 
+                                  referrerPolicy="no-referrer"
+                                />
+                              </div>
+                            )}
+                            <div className="prose prose-sm max-w-none">
+                              <ReactMarkdown 
+                                components={{
+                                  h3: ({node, ...props}) => (
+                                    <h3 className="flex items-center gap-2 text-[11px] md:text-[12px] font-bold uppercase tracking-widest text-tally-green mt-4 md:mt-8 mb-2 md:mb-4 border-b border-tally-green/10 pb-2" {...props} />
+                                  ),
+                                  ul: ({node, ...props}) => <ul className="list-none space-y-2 md:space-y-4 my-4 md:my-6 counter-reset-step" {...props} />,
+                                  li: ({node, ...props}) => (
+                                    <li className="text-[13px] md:text-[14px] relative pl-8 md:pl-10 mb-2 md:mb-4 before:content-[counter(step)] before:counter-increment-step before:absolute before:left-0 before:top-0.5 before:w-6 before:h-6 md:w-7 md:h-7 before:bg-tally-green/10 before:border-2 before:border-tally-green before:text-tally-green before:rounded-sm before:flex before:items-center before:justify-center before:text-[10px] md:text-[11px] before:font-black before:shadow-[2px_2px_0_rgba(0,96,65,0.2)]" {...props} />
+                                  ),
+                                  p: ({node, ...props}) => {
+                                    const childrenString = String(props.children || '');
+                                    if (childrenString.includes('Why this entry') || childrenString.includes('Why this is important')) {
+                                      return (
+                                        <div className="learning-mode-box mt-6 border-l-4 border-tally-green bg-green-50/50">
+                                          <div className="flex items-center gap-2 mb-2">
+                                            <Lightbulb className="w-4 h-4 text-tally-green" />
+                                            <strong className="text-tally-green uppercase tracking-wider text-[11px]">Expert Insight</strong>
+                                          </div>
+                                          <div className="text-[13px] leading-relaxed m-0 text-foreground/80">{props.children}</div>
+                                        </div>
+                                      );
+                                    }
+                                    if (childrenString.includes('Important Notes for Beginners')) {
+                                      return (
+                                        <div className="mt-6 border-l-4 border-blue-500 bg-blue-500/10 p-5 rounded-r-lg shadow-sm">
+                                          <div className="flex items-center gap-2 mb-2">
+                                            <Info className="w-4 h-4 text-blue-500" />
+                                            <strong className="text-blue-500 uppercase tracking-wider text-[11px]">Beginner's Guide</strong>
+                                          </div>
+                                          <div className="text-[13px] leading-relaxed m-0 text-foreground/80">{props.children}</div>
+                                        </div>
+                                      );
+                                    }
+                                    return <p className="text-[16px] md:text-[18px] leading-[1.8] my-4 text-foreground/90 font-medium transition-colors" {...props} />;
+                                  },
+                                  strong: ({node, ...props}) => <strong className="font-bold text-tally-green" {...props} />,
+                                  table: ({node, ...props}) => (
+                                    <div className="overflow-x-auto my-6 rounded-lg border border-slate-200 shadow-sm">
+                                      <table className="w-full border-collapse bg-white dark:bg-slate-900" {...props} />
+                                    </div>
+                                  ),
+                                  th: ({node, ...props}) => <th className="text-left text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 p-3 border-b border-border font-bold bg-muted" {...props} />,
+                                  td: ({node, ...props}) => {
+                                    const content = props.children?.toString() || '';
+                                    if (content.toLowerCase() === 'debit') {
+                                      return <td className="p-3 border-b border-border text-sm font-bold text-green-700 bg-green-50/30">Debit</td>;
+                                    }
+                                    if (content.toLowerCase() === 'credit') {
+                                      return <td className="p-3 border-b border-border text-sm font-bold text-red-700 bg-red-50/30">Credit</td>;
+                                    }
+                                    return <td className="p-3 border-b border-border text-sm text-foreground/70" {...props} />;
+                                  },
+                                  code: ({node, ...props}) => <span className="path-display my-4 block">{props.children}</span>,
+                                }}
+                              >
+                                {message.content}
+                              </ReactMarkdown>
                             </div>
-                          )}
-                          <div className="prose prose-sm max-w-none">
-                            <ReactMarkdown 
-                              components={{
-                                h3: ({node, ...props}) => (
-                                  <h3 className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-widest text-tally-green mt-8 mb-4 border-b border-tally-green/10 pb-2" {...props} />
-                                ),
-                                ul: ({node, ...props}) => <ul className="list-none space-y-4 my-6 counter-reset-step" {...props} />,
-                                li: ({node, ...props}) => (
-                                  <li className="text-[14px] relative pl-10 mb-4 before:content-[counter(step)] before:counter-increment-step before:absolute before:left-0 before:top-0.5 before:w-7 before:h-7 before:bg-tally-green/5 before:border before:border-tally-green/20 before:text-tally-green before:rounded-lg before:flex before:items-center before:justify-center before:text-[11px] before:font-bold before:shadow-sm" {...props} />
-                                ),
-                                p: ({node, ...props}) => {
-                                  const childrenString = String(props.children || '');
-                                  if (childrenString.includes('Why this entry') || childrenString.includes('Why this is important')) {
-                                    return (
-                                      <div className="learning-mode-box mt-6 border-l-4 border-tally-green bg-green-50/50">
-                                        <div className="flex items-center gap-2 mb-2">
-                                          <Lightbulb className="w-4 h-4 text-tally-green" />
-                                          <strong className="text-tally-green uppercase tracking-wider text-[11px]">Expert Insight</strong>
-                                        </div>
-                                        <div className="text-[13px] leading-relaxed m-0 text-slate-700">{props.children}</div>
-                                      </div>
-                                    );
-                                  }
-                                  if (childrenString.includes('Important Notes for Beginners')) {
-                                    return (
-                                      <div className="mt-6 border-l-4 border-blue-500 bg-blue-50/50 p-5 rounded-r-lg shadow-sm">
-                                        <div className="flex items-center gap-2 mb-2">
-                                          <Info className="w-4 h-4 text-blue-600" />
-                                          <strong className="text-blue-600 uppercase tracking-wider text-[11px]">Beginner's Guide</strong>
-                                        </div>
-                                        <div className="text-[13px] leading-relaxed m-0 text-slate-700">{props.children}</div>
-                                      </div>
-                                    );
-                                  }
-                                  return <p className="text-[16px] md:text-[18px] leading-[1.8] my-4 text-slate-800 font-medium" {...props} />;
-                                },
-                                strong: ({node, ...props}) => <strong className="font-bold text-tally-green" {...props} />,
-                                table: ({node, ...props}) => (
-                                  <div className="overflow-x-auto my-6 rounded-lg border border-slate-200 shadow-sm">
-                                    <table className="w-full border-collapse bg-white" {...props} />
-                                  </div>
-                                ),
-                                th: ({node, ...props}) => <th className="text-left text-[10px] uppercase tracking-widest text-slate-500 p-3 border-b border-slate-100 font-bold bg-slate-50/50" {...props} />,
-                                td: ({node, ...props}) => {
-                                  const content = props.children?.toString() || '';
-                                  if (content.toLowerCase() === 'debit') {
-                                    return <td className="p-3 border-b border-slate-50 text-sm font-bold text-green-700 bg-green-50/30">Debit</td>;
-                                  }
-                                  if (content.toLowerCase() === 'credit') {
-                                    return <td className="p-3 border-b border-slate-50 text-sm font-bold text-red-700 bg-red-50/30">Credit</td>;
-                                  }
-                                  return <td className="p-3 border-b border-slate-50 text-sm text-slate-600" {...props} />;
-                                },
-                                code: ({node, ...props}) => <span className="path-display my-4 block">{props.children}</span>,
-                              }}
-                            >
-                              {message.content}
-                            </ReactMarkdown>
+                            {collapsedMessages.has(message.id) && (
+                              <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-card to-transparent pointer-events-none" />
+                            )}
+                          </motion.div>
+                          
+                          <div className={cn(
+                            "flex items-center gap-1.5 mt-2",
+                            message.role === 'user' ? "justify-end" : "justify-start"
+                          )}>
+                            <span className="text-[10px] text-text-muted opacity-60">
+                              {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            {message.role === 'user' && (
+                              <div className="flex items-center text-tally-green">
+                                <CheckCheck className="w-3.5 h-3.5" />
+                              </div>
+                            )}
                           </div>
-                        </div>
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="text-[10px] text-text-muted px-1 font-bold uppercase tracking-tighter">
-                            {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                          {message.role === 'assistant' && (
-                            <div className="flex items-center gap-1">
-                            </div>
-                          )}
                         </div>
                         </motion.div>
                       );
@@ -593,24 +705,24 @@ export default function App() {
                   </div>
                   
                   {/* Floating Scroll Buttons */}
-                  <div className="fixed bottom-32 right-4 md:right-12 flex flex-col gap-3 z-50 transition-opacity">
+                  <div className="fixed bottom-40 md:bottom-32 right-3 md:right-12 flex flex-col gap-2 md:gap-3 z-[40] transition-opacity">
                     <Button 
                       size="icon" 
                       variant="secondary" 
-                      className="rounded-full shadow-2xl bg-white border-2 border-tally-green/20 h-12 w-12 text-tally-green hover:bg-tally-green hover:text-white transition-all active:scale-95"
+                      className="rounded-full shadow-2xl bg-white border-2 border-tally-green/20 h-9 w-9 md:h-12 md:w-12 text-tally-green hover:bg-tally-green hover:text-white transition-all active:scale-95"
                       onClick={scrollToTop}
                       title="Scroll to Top"
                     >
-                      <ArrowUp className="w-6 h-6" />
+                      <ArrowUp className="w-5 h-5 md:w-6 md:h-6" />
                     </Button>
                     <Button 
                       size="icon" 
                       variant="secondary" 
-                      className="rounded-full shadow-2xl bg-white border-2 border-tally-green/20 h-12 w-12 text-tally-green hover:bg-tally-green hover:text-white transition-all active:scale-95"
+                      className="rounded-full shadow-2xl bg-white border-2 border-tally-green/20 h-9 w-9 md:h-12 md:w-12 text-tally-green hover:bg-tally-green hover:text-white transition-all active:scale-95"
                       onClick={scrollToBottom}
                       title="Scroll to Bottom"
                     >
-                      <ArrowDown className="w-6 h-6" />
+                      <ArrowDown className="w-5 h-5 md:w-6 md:h-6" />
                     </Button>
                   </div>
                 </ScrollArea>
@@ -621,19 +733,17 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="h-full p-4 md:p-8 flex flex-col items-center justify-center bg-bg-main"
+                className="min-h-full p-2 md:p-8 flex flex-col items-center justify-start md:justify-center bg-bg-main overflow-y-auto"
               >
-                <div className="w-full max-w-4xl min-h-[400px] md:aspect-video bg-[#000080] rounded-lg shadow-2xl border-4 border-[#C0C0C0] overflow-hidden flex flex-col font-mono text-white relative">
-                  {/* Tally Header */}
-                  <div className="bg-[#C0C0C0] text-black px-2 md:px-4 py-1 md:py-2 flex justify-between text-[10px] md:text-xs font-black border-b-2 border-black/30 shadow-[0_4px_10px_rgba(0,0,0,0.2)]">
-                    <span className="tracking-[0.2em]">TALLYPRIME</span>
-                    <div className="hidden sm:flex gap-6">
-                      <span className="hover:text-tally-green cursor-pointer transition-colors">P: Print</span>
-                      <span className="hover:text-tally-green cursor-pointer transition-colors">E: Export</span>
-                      <span className="hover:text-tally-green cursor-pointer transition-colors">M: E-Mail</span>
-                      <span className="hover:text-tally-green cursor-pointer transition-colors">O: Upload</span>
-                    </div>
-                  </div>
+                <div className="w-full max-w-4xl min-h-[500px] md:min-h-[600px] md:aspect-video bg-[#000080] rounded-lg shadow-2xl border-4 border-[#C0C0C0] overflow-hidden flex flex-col font-mono text-white relative my-4 md:my-0 transform-gpu transition-transform origin-top tally-sim-screen">
+                              <div className="bg-[#C0C0C0] text-black px-2 md:px-4 py-1.5 md:py-2 flex justify-between text-[11px] md:text-sm font-black border-b-4 border-black/40 shadow-xl relative z-10">
+                                <span className="tracking-[0.3em] flex items-center gap-2"><div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-tally-green rounded-full shadow-inner" /> TALLYPRIME</span>
+                                <div className="flex gap-2 md:gap-6 items-center">
+                                  <span className="hover:text-tally-green cursor-pointer transition-colors text-[10px] md:text-xs bg-black/10 px-2 py-0.5 rounded">P: Print</span>
+                                  <span className="hover:text-tally-green cursor-pointer transition-colors text-[10px] md:text-xs bg-black/10 px-2 py-0.5 rounded">E: Export</span>
+                                  <span className="hover:text-tally-green cursor-pointer transition-colors hidden sm:bg-black/10 sm:px-2 sm:py-0.5 sm:rounded">M: E-Mail</span>
+                                </div>
+                              </div>
                   
                   {/* Tally Main Area */}
                   <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
@@ -691,7 +801,11 @@ export default function App() {
                             <div className="px-6 py-2 flex justify-between hover:bg-white/10 cursor-pointer text-sm md:text-base transition-colors"><span>Ratio Analysis</span> <span className="text-yellow-400 font-bold">R</span></div>
                             
                             <div className="bg-[#000044] text-center text-[11px] md:text-sm font-black py-2 border-b-2 border-t-2 border-white/20 mt-3 tracking-widest uppercase">Quit</div>
-                            <div className="px-6 py-2 flex justify-between hover:bg-white/10 cursor-pointer text-sm md:text-base transition-colors"><span>Quit</span> <span className="text-yellow-400 font-bold">Q</span></div>
+                            <div className="px-6 py-2 flex justify-between hover:bg-yellow-400 hover:text-blue-900 group cursor-pointer text-sm md:text-base transition-colors"><span>Quit</span> <span className="text-yellow-400 group-hover:text-blue-900 font-bold">Q</span></div>
+                          </div>
+                          
+                          <div className="flex-1 hidden md:flex items-center justify-center pointer-events-none opacity-20 transform -rotate-12 select-none">
+                            <div className="text-[120px] font-black tracking-[0.5em] text-white">TALLY</div>
                           </div>
                         </div>
                       ) : simView === 'voucher' ? (
@@ -726,11 +840,13 @@ export default function App() {
                               </div>
                               
                               <div className="flex items-center gap-2 md:gap-4">
-                                <span className="w-12 md:w-20 text-[12px] md:text-lg font-black text-yellow-400 text-center border-r border-white/10">DR</span>
-                                <span className="flex-1 text-[12px] md:text-lg font-bold text-white bg-blue-900/80 px-5 py-3 rounded-lg border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.3)] truncate uppercase tracking-widest flex items-center justify-center min-h-[50px]">
-                                  {tallyInfo?.debit || 'Select Ledger...'}
-                                </span>
-                                <span className="w-20 md:w-32 text-right text-[12px] md:text-lg font-black text-green-400 drop-shadow-[0_0_5px_rgba(74,222,128,0.3)]">{tallyInfo?.amount || '0.00'}</span>
+                                <span className="w-12 md:w-20 text-[12px] md:text-lg font-black text-yellow-400 text-center border-r border-white/10 uppercase">DR</span>
+                                <div className="flex-1 flex flex-col">
+                                  <span className="text-[12px] md:text-lg font-bold text-white bg-blue-900/90 px-5 py-3 rounded-lg border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.2)] truncate uppercase tracking-widest min-h-[50px] flex items-center justify-center">
+                                    {tallyInfo?.debit || 'Select Debit Ledger...'}
+                                  </span>
+                                </div>
+                                <span className="w-20 md:w-32 text-right text-[12px] md:text-lg font-black text-green-400 drop-shadow-[0_0_5px_rgba(74,222,128,0.4)]">₹{tallyInfo?.amount || '0.00'}</span>
                               </div>
                               
                               {tallyInfo?.items && (
@@ -746,11 +862,13 @@ export default function App() {
                               )}
                               
                               <div className="flex items-center gap-2 md:gap-4">
-                                <span className="w-12 md:w-20 text-[12px] md:text-lg font-black text-yellow-400 text-center border-r border-white/10">CR</span>
-                                <span className="flex-1 text-[12px] md:text-lg font-bold text-white bg-blue-900/80 px-5 py-3 rounded-lg border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.3)] truncate uppercase tracking-widest flex items-center justify-center min-h-[50px]">
-                                  {tallyInfo?.credit || 'Select Ledger...'}
-                                </span>
-                                <span className="w-20 md:w-32 text-right text-[12px] md:text-lg font-black text-green-400 drop-shadow-[0_0_5px_rgba(74,222,128,0.3)]">{tallyInfo?.amount || '0.00'}</span>
+                                <span className="w-12 md:w-20 text-[12px] md:text-lg font-black text-yellow-400 text-center border-r border-white/10 uppercase">CR</span>
+                                <div className="flex-1 flex flex-col">
+                                  <span className="text-[12px] md:text-lg font-bold text-white bg-blue-900/90 px-5 py-3 rounded-lg border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.2)] truncate uppercase tracking-widest min-h-[50px] flex items-center justify-center">
+                                    {tallyInfo?.credit || 'Select Credit Ledger...'}
+                                  </span>
+                                </div>
+                                <span className="w-20 md:w-32 text-right text-[12px] md:text-lg font-black text-green-400 drop-shadow-[0_0_5px_rgba(74,222,128,0.4)]">₹{tallyInfo?.amount || '0.00'}</span>
                               </div>
                             </div>
                             
@@ -894,18 +1012,18 @@ export default function App() {
         </div>
 
         {/* Input Area */}
-        <div className="p-4 md:p-8 bg-bg-main">
+        <div className="shrink-0 p-2 md:p-8 bg-card border-t-2 border-border z-10 shadow-[0_-4px_12px_rgba(0,0,0,0.15)] theme-transition">
           <div className="max-w-4xl mx-auto">
             {selectedImage && (
               <motion.div 
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="mb-4 relative inline-block"
+                className="mb-3 relative inline-block"
               >
                 <img 
                   src={selectedImage} 
                   alt="Preview" 
-                  className="h-24 w-24 object-cover rounded-md border-2 border-white shadow-md" 
+                  className="h-20 w-20 object-cover rounded-md border-2 border-tally-green shadow-md" 
                   referrerPolicy="no-referrer"
                 />
                 <Button 
@@ -919,19 +1037,19 @@ export default function App() {
               </motion.div>
             )}
             
-            <div className="flex flex-wrap gap-2 mb-6 justify-center">
+            <div className="flex flex-nowrap overflow-x-auto no-scrollbar gap-2 mb-4 justify-start pb-1">
               {['Paid 5000 Rent', 'Sold Goods 10000', 'Salary 25000', 'GST Report', 'Balance Sheet'].map((chip) => (
                 <button
                   key={chip}
                   onClick={() => setInput(chip)}
-                  className="text-[11px] font-bold uppercase tracking-widest px-4 py-2 bg-white border-2 border-tally-green/10 rounded-lg hover:border-tally-green hover:bg-tally-green hover:text-white transition-all shadow-sm active:scale-95"
+                  className="text-[10px] font-bold uppercase tracking-widest px-3 py-2 bg-bg-main border border-border-theme rounded-md hover:border-tally-green hover:bg-tally-green hover:text-white transition-all active:scale-95 shrink-0 whitespace-nowrap"
                 >
                   {chip}
                 </button>
               ))}
             </div>
             
-            <div className="relative flex items-center gap-1 md:gap-2 bg-white rounded-md shadow-sm border border-border-theme p-1 md:p-2 pr-2 md:pr-4">
+            <div className="relative flex items-center gap-1 md:gap-2 bg-muted rounded-md border-2 border-border p-1 md:p-1.5 pr-2 md:pr-4 shadow-inner">
               <input 
                 type="file" 
                 ref={fileInputRef} 
@@ -961,7 +1079,7 @@ export default function App() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                 placeholder="Describe transaction..." 
-                className="flex-1 border-none shadow-none focus-visible:ring-0 text-sm md:text-base placeholder:text-text-muted italic h-8 md:h-10"
+                className="flex-1 border-none shadow-none focus-visible:ring-0 text-sm md:text-base placeholder:text-text-muted italic h-9 md:h-10 bg-transparent"
               />
               <Button 
                 size="sm"
@@ -973,13 +1091,16 @@ export default function App() {
                 <span className="hidden sm:inline ml-2">Analyze</span>
               </Button>
             </div>
-            <div className="flex justify-center gap-6 mt-4">
-              <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">
-                Geometric Balance Theme
-              </p>
-              <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">
-                Tally ERP 9 & Prime Expert
-              </p>
+            <div className="flex justify-center items-center gap-4 md:gap-12 mt-2 md:mt-8 pt-4 border-t border-border/20 relative overflow-hidden">
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-1 bg-tally-green/20 rounded-full" />
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-tally-green rotate-45" />
+                <p className="text-[8px] md:text-[10px] text-text-muted font-black uppercase tracking-[0.2em]">Geometric Balance</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-accent-green rotate-45 shadow-[2px_2px_0_rgba(0,130,80,0.2)]" />
+                <p className="text-[8px] md:text-[10px] text-text-muted font-black uppercase tracking-[0.2em]">Prime Mastery</p>
+              </div>
             </div>
           </div>
         </div>

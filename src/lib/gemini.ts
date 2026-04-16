@@ -104,7 +104,7 @@ export async function analyzeTransaction(input: string | { mimeType: string; dat
     console.log("Calling ai.models.generateContent with model:", model);
     const response = await ai.models.generateContent({
       model,
-      contents: { parts }, // Simplified format
+      contents: { parts },
       config: {
         systemInstruction: SYSTEM_PROMPT,
         temperature: 0.7,
@@ -112,12 +112,14 @@ export async function analyzeTransaction(input: string | { mimeType: string; dat
     });
 
     console.log("Gemini API response received. Success:", !!response.text);
-    if (!response.text) {
+    const text = response.text;
+    
+    if (!text) {
       console.error("Response text is empty. Full response:", response);
       throw new Error("AI returned an empty response.");
     }
 
-    return response.text;
+    return text;
   } catch (error: any) {
     console.error("Gemini Error Details:", error);
     throw new Error(error.message || "Failed to connect to AI");
