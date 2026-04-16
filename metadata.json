@@ -1,0 +1,6 @@
+{
+  "name": "Tally AI Assistant",
+  "description": "An expert Tally ERP 9 & Tally Prime assistant that guides users through accounting entries step-by-step using text or voucher images.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}

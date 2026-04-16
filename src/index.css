@@ -1,0 +1,120 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@theme inline {
+    --font-sans: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --color-background: #f2f4f7;
+    --color-foreground: #1a1c1e;
+    --color-card: #ffffff;
+    --color-card-foreground: #1a1c1e;
+    --color-popover: #ffffff;
+    --color-popover-foreground: #1a1c1e;
+    --color-primary: #006041;
+    --color-primary-foreground: #ffffff;
+    --color-secondary: #f8fafc;
+    --color-secondary-foreground: #1a1c1e;
+    --color-muted: #f8fafc;
+    --color-muted-foreground: #64748b;
+    --color-accent: #008250;
+    --color-accent-foreground: #ffffff;
+    --color-destructive: #ef4444;
+    --color-border: #e2e8f0;
+    --color-input: #e2e8f0;
+    --color-ring: #008250;
+    --radius-theme: 8px;
+
+    --color-tally-green: #006041;
+    --color-accent-green: #008250;
+    --color-bg-main: #f2f4f7;
+    --color-card-bg: #ffffff;
+    --color-text-dark: #1a1c1e;
+    --color-text-muted: #64748b;
+    --color-border-theme: #e2e8f0;
+}
+
+:root {
+    --background: #f2f4f7;
+    --foreground: #1a1c1e;
+    --card: #ffffff;
+    --card-foreground: #1a1c1e;
+    --popover: #ffffff;
+    --popover-foreground: #1a1c1e;
+    --primary: #006041;
+    --primary-foreground: #ffffff;
+    --secondary: #f8fafc;
+    --secondary-foreground: #1a1c1e;
+    --muted: #f8fafc;
+    --muted-foreground: #64748b;
+    --accent: #008250;
+    --accent-foreground: #ffffff;
+    --destructive: #ef4444;
+    --border: #e2e8f0;
+    --input: #e2e8f0;
+    --ring: #008250;
+    --radius: 8px;
+}
+
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #006041;
+  border-radius: 10px;
+  border: 2px solid #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #008250;
+}
+
+/* Force scrollbar visibility for elements with overflow */
+.force-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #006041 #f1f1f1;
+}
+
+/* Custom theme classes */
+.card-title-bar {
+  @apply flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400 mb-4 pb-2 border-b border-slate-100;
+}
+
+.card-title-bar::before {
+  content: '';
+  @apply w-1.5 h-1.5 bg-tally-green rounded-full;
+}
+
+.path-display {
+  @apply bg-slate-900 text-sky-400 p-4 rounded-lg font-mono text-[13px] border border-slate-800 shadow-inner leading-relaxed;
+}
+
+.path-display::before {
+  content: 'Tally Path: ';
+  @apply text-slate-500 font-sans font-bold uppercase text-[10px] block mb-1 tracking-widest;
+}
+
+.learning-mode-box {
+  @apply bg-green-50/50 border-l-4 border-tally-green p-5 rounded-r-lg shadow-sm my-6;
+}
+
+.learning-mode-box strong {
+  @apply block mb-2 text-tally-green uppercase text-[11px] font-bold tracking-widest;
+}
