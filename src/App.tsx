@@ -135,22 +135,6 @@ export default function App() {
     }
   }, [messages]);
 
-  const scrollToBottom = () => {
-    const viewport = scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') || 
-                     scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
-    if (viewport) {
-      viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' });
-    }
-  };
-
-  const scrollToTop = () => {
-    const viewport = scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') || 
-                     scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
-    if (viewport) {
-      viewport.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-  };
-
   const handleSend = async () => {
     console.log("handleSend triggered. Input:", input, "Image:", !!selectedImage);
     if (!input.trim() && !selectedImage) return;
@@ -702,28 +686,6 @@ export default function App() {
                         Analyzing...
                       </motion.div>
                     )}
-                  </div>
-                  
-                  {/* Floating Scroll Buttons */}
-                  <div className="fixed bottom-40 md:bottom-32 right-3 md:right-12 flex flex-col gap-2 md:gap-3 z-[40] transition-opacity">
-                    <Button 
-                      size="icon" 
-                      variant="secondary" 
-                      className="rounded-full shadow-2xl bg-white border-2 border-tally-green/20 h-9 w-9 md:h-12 md:w-12 text-tally-green hover:bg-tally-green hover:text-white transition-all active:scale-95"
-                      onClick={scrollToTop}
-                      title="Scroll to Top"
-                    >
-                      <ArrowUp className="w-5 h-5 md:w-6 md:h-6" />
-                    </Button>
-                    <Button 
-                      size="icon" 
-                      variant="secondary" 
-                      className="rounded-full shadow-2xl bg-white border-2 border-tally-green/20 h-9 w-9 md:h-12 md:w-12 text-tally-green hover:bg-tally-green hover:text-white transition-all active:scale-95"
-                      onClick={scrollToBottom}
-                      title="Scroll to Bottom"
-                    >
-                      <ArrowDown className="w-5 h-5 md:w-6 md:h-6" />
-                    </Button>
                   </div>
                 </ScrollArea>
               </motion.div>
