@@ -38,7 +38,14 @@ import {
   ChevronDown,
   Info,
   Sun,
-  Moon
+  Moon,
+  LogOut,
+  User,
+  Wallet,
+  TrendingUp,
+  TrendingDown,
+  BarChart3,
+  Calendar
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { analyzeTransaction } from './lib/gemini';
@@ -52,6 +59,51 @@ import { Badge } from '@/components/ui/badge';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { auth, db, googleProvider, handleFirestoreError, OperationType } from './lib/firebase';
+import { 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged, 
+  User as FirebaseUser 
+} from 'firebase/auth';
+import { 
+  collection, 
+  query, 
+  orderBy, 
+  onSnapshot, 
+  addDoc, 
+  serverTimestamp, 
+  Timestamp,
+  doc,
+  setDoc,
+  getDoc,
+  where,
+  runTransaction
+} from 'firebase/firestore';
+import { format } from 'date-fns';
+
+interface Entry {
+  ledgerName: string;
+  amount: number;
+  entryType: 'DR' | 'CR';
+}
+
+interface Voucher {
+  id?: string;
+  type: 'Payment' | 'Receipt' | 'Contra' | 'Journal' | 'Sales' | 'Purchase';
+  totalAmount: number;
+  narration: string;
+  entries: Entry[];
+  date: any;
+  createdBy: string;
+}
+
+interface Ledger {
+  id: string;
+  name: string;
+  group: string;
+  currentBalance: number;
+}
 
 interface Message {
   id: string;
@@ -62,11 +114,16 @@ interface Message {
 }
 
 export default function App() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [vouchers, setVouchers] = useState<Voucher[]>([]);
+  const [ledgers, setLedgers] = useState<Ledger[]>([]);
+  
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'assistant',
-      content: 'नमस्ते! मैं आपका Tally AI Assistant हूँ। आप मुझे कोई भी transaction बता सकते हैं या voucher की फोटो भेज सकते हैं, और मैं आपको step-by-step Tally entry सिखाऊँगा।\n\nउदाहरण के लिए: "Paid ₹5000 rent in cash"\n\n**Tip:** Entry को live देखने के लिए ऊपर "Simulation" tab पर क्लिक करें!',
+      content: 'नमस्ते! मैं आपका Accounting Assistant हूँ। आप मुझे कोई भी transaction बता सकते हैं, और मैं उसे record कर दूँगा।\n\nउदाहरण के लिए: "Spent 500 on dinner with clients"\n\n**Tip:** Dashboard चेक करें अपनी Financial Health देखने के लिए!',
       timestamp: new Date(),
     }
   ]);
@@ -78,6 +135,134 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [collapsedMessages, setCollapsedMessages] = useState<Set<string>>(new Set());
+
+  // Firebase Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+      if (u) {
+        // Create user doc if not exists
+        const userRef = doc(db, 'users', u.uid);
+        getDoc(userRef).then((snap) => {
+          if (!snap.exists()) {
+            setDoc(userRef, {
+              uid: u.uid,
+              displayName: u.displayName,
+              email: u.email,
+              createdAt: serverTimestamp()
+            });
+            // Bootstrap default ledgers
+            const ledgersToCreate = [
+              { name: 'Cash', group: 'Assets', subGroup: 'Cash-in-hand', openingBalance: 0 },
+              { name: 'Bank', group: 'Assets', subGroup: 'Bank Accounts', openingBalance: 0 },
+              { name: 'Sales', group: 'Revenue', subGroup: 'Sales Accounts', openingBalance: 0 },
+              { name: 'Rent', group: 'Expenses', subGroup: 'Indirect Expenses', openingBalance: 0 },
+              { name: 'Office Supplies', group: 'Expenses', subGroup: 'Indirect Expenses', openingBalance: 0 }
+            ];
+            ledgersToCreate.forEach(l => {
+              addDoc(collection(db, `users/${u.uid}/ledgers`), {
+                ...l,
+                currentBalance: l.openingBalance,
+                createdBy: u.uid
+              });
+            });
+          }
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore Sync - Vouchers & Ledgers
+  useEffect(() => {
+    if (!user) return;
+
+    const vQuery = query(collection(db, `users/${user.uid}/vouchers`), orderBy('date', 'desc'));
+    const unsubscribeV = onSnapshot(vQuery, (snap) => {
+      setVouchers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Voucher)));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/vouchers`));
+
+    const lQuery = query(collection(db, `users/${user.uid}/ledgers`));
+    const unsubscribeL = onSnapshot(lQuery, (snap) => {
+      setLedgers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Ledger)));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/ledgers`));
+
+    return () => {
+      unsubscribeV();
+      unsubscribeL();
+    };
+  }, [user]);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err) {
+      toast.error('Login failed');
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setVouchers([]);
+      setLedgers([]);
+    } catch (err) {
+      toast.error('Logout failed');
+    }
+  };
+
+  const recordVoucher = async (vData: Partial<Voucher>) => {
+    if (!user) return;
+    try {
+      await runTransaction(db, async (transaction) => {
+        // 1. Add the voucher
+        const newVoucherRef = doc(collection(db, `users/${user.uid}/vouchers`));
+        transaction.set(newVoucherRef, {
+          ...vData,
+          date: serverTimestamp(),
+          createdBy: user.uid
+        });
+
+        // 2. Update each involved ledger's balance
+        if (vData.entries) {
+          for (const entry of vData.entries) {
+            // Find the ledger by name (or we could use IDs if we had them)
+            const ledgerQuery = query(
+              collection(db, `users/${user.uid}/ledgers`), 
+              where('name', '==', entry.ledgerName)
+            );
+            // Since we're in a transaction, we need to use 'get' for query isn't directly supported in many transaction wrappers
+            // But Firestore transactions require specific document references.
+            // Simplified approach for now: find matching ledger in local state and use its ID
+            const targetLedger = ledgers.find(l => l.name === entry.ledgerName);
+            if (targetLedger) {
+              const ledgerRef = doc(db, `users/${user.uid}/ledgers`, targetLedger.id);
+              const ledgerSnapshot = await transaction.get(ledgerRef);
+              if (ledgerSnapshot.exists()) {
+                const currentBalance = ledgerSnapshot.data().currentBalance || 0;
+                let newBalance = currentBalance;
+                
+                // Group logic: Assets/Expenses increase with DR
+                const isAssetOrExpense = ['Assets', 'Expenses'].includes(targetLedger.group);
+                if (entry.entryType === 'DR') {
+                  newBalance += isAssetOrExpense ? entry.amount : -entry.amount;
+                } else {
+                  newBalance += isAssetOrExpense ? -entry.amount : entry.amount;
+                }
+                
+                transaction.update(ledgerRef, { currentBalance: newBalance });
+              }
+            }
+          }
+        }
+      });
+      toast.success(`${vData.type} recorded successfully`);
+    } catch (err) {
+      console.error("Voucher recording failed:", err);
+      toast.error("Failed to record transaction properly.");
+    }
+  };
 
   const toggleCollapse = (id: string) => {
     setCollapsedMessages(prev => {
@@ -187,6 +372,22 @@ export default function App() {
       console.log("Updating messages state...");
       setMessages(prev => [...prev, assistantMessage]);
       console.log("Messages state updated. Current count:", messages.length + 1);
+
+      // Check for structured data to record
+      if (responseText.includes('accounting-data')) {
+        const jsonMatch = responseText.match(/```accounting-data\n([\s\S]*?)\n```/);
+        if (jsonMatch) {
+          try {
+            const data = JSON.parse(jsonMatch[1]);
+            if (data.transactionFound && data.voucher) {
+              recordVoucher(data.voucher);
+            }
+          } catch (e) {
+            console.error("Failed to parse accounting data:", e);
+          }
+        }
+      }
+
       setSelectedImage(null);
       setSimView('gateway');
       setActiveTab('chat');
@@ -257,6 +458,66 @@ export default function App() {
     toast.success('Advice exported as text file');
   };
 
+  const stats = useMemo(() => {
+    const totalCash = vouchers.filter(v => v.type === 'Receipt').reduce((acc, v) => acc + v.totalAmount, 0) - 
+                      vouchers.filter(v => v.type === 'Payment').reduce((acc, v) => acc + v.totalAmount, 0);
+    const totalRevenue = vouchers.filter(v => v.type === 'Sales').reduce((acc, v) => acc + v.totalAmount, 0);
+    const totalExpenses = vouchers.filter(v => v.type === 'Payment' || v.type === 'Purchase').reduce((acc, v) => acc + v.totalAmount, 0);
+    
+    return {
+      balance: totalCash,
+      revenue: totalRevenue,
+      expenses: totalExpenses,
+      recentCount: vouchers.length
+    };
+  }, [vouchers]);
+
+  if (!authReady) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-bg-main">
+        <Loader2 className="w-12 h-12 animate-spin text-tally-green" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-bg-main p-6">
+        <Card className="w-full max-w-md shadow-2xl border-4 border-tally-green">
+          <CardHeader className="text-center bg-tally-green text-white pb-8">
+            <Calculator className="w-16 h-16 mx-auto mb-4 text-accent-green" />
+            <CardTitle className="text-3xl font-black tracking-tighter uppercase">Accounting Assistant</CardTitle>
+            <CardDescription className="text-white/80 font-bold uppercase tracking-widest text-[10px]">Your professional bookkeeping companion</CardDescription>
+          </CardHeader>
+          <CardContent className="p-8 space-y-6">
+            <div className="space-y-4">
+              <p className="text-center text-sm text-text-muted font-medium italic">
+                Securely manage your ledgers, track vouchers, and generate real-time reports with AI assistance.
+              </p>
+              <Button 
+                onClick={handleLogin} 
+                className="w-full h-14 bg-white hover:bg-gray-50 text-slate-900 border-2 border-slate-200 shadow-sm flex items-center justify-center gap-4 text-sm font-bold transition-all active:scale-[0.98]"
+              >
+                <div className="bg-white p-2 rounded-full border border-gray-100 shadow-sm">
+                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.66l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                  </svg>
+                </div>
+                Sign in with Google Account
+              </Button>
+            </div>
+            <div className="text-center text-[10px] text-text-muted/60 uppercase font-bold tracking-widest">
+              Secured by Firebase Authentication
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const lastAssistantMessage = useMemo(() => {
     return [...messages].reverse().find(m => m.role === 'assistant')?.content || '';
   }, [messages]);
@@ -297,7 +558,7 @@ export default function App() {
 
   return (
     <div className="flex h-[100dvh] bg-bg-main font-sans text-text-dark overflow-hidden">
-      <Toaster position="top-center" />
+      <Toaster position="bottom-right" />
       
       {(typeof process === 'undefined' || !process.env.GEMINI_API_KEY) && (
         <div className="fixed top-0 left-0 right-0 bg-red-600 text-white p-2 text-center text-[10px] font-bold z-[100] animate-pulse uppercase tracking-widest">
@@ -403,6 +664,20 @@ export default function App() {
         </ScrollArea>
 
         <div className="p-4 border-t border-border-theme space-y-1 bg-gray-50/50">
+          {user && (
+            <div className="flex items-center gap-3 p-3 mb-2 bg-white rounded-lg border border-slate-200">
+              <div className="w-8 h-8 rounded-full bg-tally-green flex items-center justify-center text-white font-black text-xs uppercase shadow-sm">
+                {user.displayName?.[0] || 'U'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-black text-slate-800 truncate uppercase leading-none">{user.displayName}</div>
+                <div className="text-[9px] font-bold text-slate-400 truncate tracking-widest mt-1">{user.email}</div>
+              </div>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600" onClick={handleLogout}>
+                <LogOut className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
           <Button 
             variant="ghost" 
             className="w-full justify-start gap-3 h-10 text-text-muted text-[10px] font-black uppercase tracking-widest hover:text-red-600 transition-colors" 
@@ -507,6 +782,7 @@ export default function App() {
               <Tabs value={activeTab} onValueChange={setActiveTab} className="flex">
                 <TabsList className="bg-black/30 p-0.5 h-8 md:h-9 border border-white/10">
                   <TabsTrigger value="chat" className="rounded-sm px-2.5 md:px-4 text-[10px] md:text-xs font-black uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:text-tally-green transition-all">CHAT</TabsTrigger>
+                  <TabsTrigger value="dashboard" className="rounded-sm px-2.5 md:px-4 text-[10px] md:text-xs font-black uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:text-tally-green transition-all">DASHBOARD</TabsTrigger>
                   <TabsTrigger value="simulate" className="rounded-sm px-2.5 md:px-4 text-[10px] md:text-xs font-black uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:text-tally-green transition-all">SIM</TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -516,7 +792,7 @@ export default function App() {
         {/* Content Area */}
         <div className="flex-1 relative overflow-hidden flex flex-col">
           <AnimatePresence mode="wait">
-            {activeTab === 'chat' ? (
+            {activeTab === 'chat' && (
               <motion.div 
                 key="chat"
                 initial={{ opacity: 0 }}
@@ -689,7 +965,158 @@ export default function App() {
                   </div>
                 </ScrollArea>
               </motion.div>
-            ) : (
+            )}
+
+            {activeTab === 'dashboard' && (
+              <motion.div
+                key="dashboard"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full overflow-y-auto bg-bg-main p-4 md:p-8"
+              >
+                <div className="max-w-6xl mx-auto space-y-8">
+                  <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 border-l-4 border-tally-green pl-4 uppercase tracking-tighter">Business Dashboard</h2>
+                      <p className="text-sm text-text-muted font-bold uppercase tracking-widest mt-1 opacity-60">Real-time Financial Snapshot</p>
+                    </div>
+                    <div className="flex items-center gap-4 bg-white p-2 rounded-lg shadow-sm border">
+                      <Calendar className="w-5 h-5 text-tally-green" />
+                      <span className="text-sm font-black text-slate-700">{format(new Date(), 'EEEE, do MMMM yyyy')}</span>
+                    </div>
+                  </header>
+
+                  {/* Stats Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+                    <Card className="border-b-4 border-b-tally-green shadow-md hover:shadow-lg transition-shadow">
+                      <CardContent className="pt-6">
+                        <div className="flex items-center justify-between mb-2">
+                          <Wallet className="w-6 h-6 text-tally-green" />
+                          <Badge variant="secondary" className="bg-green-50 text-tally-green text-[10px] font-black">LIQUIDITY</Badge>
+                        </div>
+                        <div className="text-3xl font-black text-slate-900">₹{stats.balance.toLocaleString()}</div>
+                        <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest mt-2">Cash & Bank Balance</p>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-b-4 border-b-blue-500 shadow-md hover:shadow-lg transition-shadow">
+                      <CardContent className="pt-6">
+                        <div className="flex items-center justify-between mb-2">
+                          <TrendingUp className="w-6 h-6 text-blue-500" />
+                          <Badge variant="secondary" className="bg-blue-50 text-blue-500 text-[10px] font-black">REVENUE</Badge>
+                        </div>
+                        <div className="text-3xl font-black text-slate-900">₹{stats.revenue.toLocaleString()}</div>
+                        <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest mt-2">Total Sales (MTD)</p>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-b-4 border-b-orange-500 shadow-md hover:shadow-lg transition-shadow">
+                      <CardContent className="pt-6">
+                        <div className="flex items-center justify-between mb-2">
+                          <TrendingDown className="w-6 h-6 text-orange-500" />
+                          <Badge variant="secondary" className="bg-orange-50 text-orange-500 text-[10px] font-black">PAYOUTS</Badge>
+                        </div>
+                        <div className="text-3xl font-black text-slate-900">₹{stats.expenses.toLocaleString()}</div>
+                        <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest mt-2">Total Expenses (MTD)</p>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-b-4 border-b-slate-400 shadow-md hover:shadow-lg transition-shadow">
+                      <CardContent className="pt-6">
+                        <div className="flex items-center justify-between mb-2">
+                          <BarChart3 className="w-6 h-6 text-slate-400" />
+                          <Badge variant="secondary" className="bg-slate-50 text-slate-400 text-[10px] font-black">ACTIVITY</Badge>
+                        </div>
+                        <div className="text-3xl font-black text-slate-900">{stats.recentCount}</div>
+                        <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest mt-2">Vouchers Recorded</p>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    {/* Recent Transactions Table */}
+                    <Card className="lg:col-span-2 shadow-xl border-none">
+                      <CardHeader className="bg-slate-900 text-white rounded-t-lg px-6 py-4">
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-sm font-black uppercase tracking-widest">Recent Transactions</CardTitle>
+                          <Button variant="ghost" size="sm" className="text-white/60 hover:text-white hover:bg-white/10 text-[10px] uppercase font-bold">View Daybook</Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="p-0">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse">
+                            <thead>
+                              <tr className="border-b bg-slate-50">
+                                <th className="p-4 text-[10px] uppercase font-black text-slate-500 tracking-widest">Date</th>
+                                <th className="p-4 text-[10px] uppercase font-black text-slate-500 tracking-widest">Voucher Type</th>
+                                <th className="p-4 text-[10px] uppercase font-black text-slate-500 tracking-widest">Narration</th>
+                                <th className="p-4 text-right text-[10px] uppercase font-black text-slate-500 tracking-widest">Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {vouchers.slice(0, 10).map((v) => (
+                                <tr key={v.id} className="border-b hover:bg-slate-50 transition-colors group">
+                                  <td className="p-4 text-xs font-bold text-slate-600">
+                                    {v.date ? format(v.date.toDate(), 'dd MMM') : 'Just now'}
+                                  </td>
+                                  <td className="p-4">
+                                    <Badge className={cn(
+                                      "text-[10px] font-black uppercase tracking-widest",
+                                      v.type === 'Payment' ? "bg-orange-100 text-orange-700" :
+                                      v.type === 'Receipt' ? "bg-green-100 text-green-700" :
+                                      v.type === 'Sales' ? "bg-blue-100 text-blue-700" :
+                                      "bg-slate-100 text-slate-700"
+                                    )}>
+                                      {v.type}
+                                    </Badge>
+                                  </td>
+                                  <td className="p-4 text-xs font-medium text-slate-700 max-w-xs truncate italic">
+                                    "{v.narration}"
+                                  </td>
+                                  <td className="p-4 text-right text-xs font-black text-slate-900">
+                                    ₹{v.totalAmount.toLocaleString()}
+                                  </td>
+                                </tr>
+                              ))}
+                              {vouchers.length === 0 && (
+                                <tr>
+                                  <td colSpan={4} className="p-8 text-center text-sm text-text-muted italic">No transactions recorded yet. Ask the assistant to record one!</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* Chart of Accounts Summary */}
+                    <Card className="shadow-xl border-none">
+                      <CardHeader className="bg-tally-green text-white rounded-t-lg px-6 py-4">
+                        <CardTitle className="text-sm font-black uppercase tracking-widest underline decoration-accent-green decoration-2 underline-offset-4">Chart of Accounts</CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-4 bg-white">
+                        <div className="space-y-4">
+                          {ledgers.sort((a,b) => b.currentBalance - a.currentBalance).slice(0, 8).map(l => (
+                            <div key={l.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-100 hover:border-tally-green group transition-all">
+                              <div>
+                                <div className="text-[11px] font-black text-slate-800 uppercase tracking-tight">{l.name}</div>
+                                <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{l.group}</div>
+                              </div>
+                              <div className="text-sm font-black text-slate-900 italic">
+                                ₹{l.currentBalance.toLocaleString()}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'simulate' && (
               <motion.div 
                 key="simulate"
                 initial={{ opacity: 0 }}
