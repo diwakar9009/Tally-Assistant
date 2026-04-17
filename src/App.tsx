@@ -45,7 +45,9 @@ import {
   TrendingUp,
   TrendingDown,
   BarChart3,
-  Calendar
+  Calendar,
+  ShieldCheck,
+  Paperclip
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { analyzeTransaction } from './lib/gemini';
@@ -59,28 +61,16 @@ import { Badge } from '@/components/ui/badge';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { auth, db, googleProvider, handleFirestoreError, OperationType } from './lib/firebase';
+import { format, startOfMonth, subMonths, isWithinInterval } from 'date-fns';
 import { 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged, 
-  User as FirebaseUser 
-} from 'firebase/auth';
-import { 
-  collection, 
-  query, 
-  orderBy, 
-  onSnapshot, 
-  addDoc, 
-  serverTimestamp, 
-  Timestamp,
-  doc,
-  setDoc,
-  getDoc,
-  where,
-  runTransaction
-} from 'firebase/firestore';
-import { format } from 'date-fns';
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer 
+} from 'recharts';
 
 interface Entry {
   ledgerName: string;
@@ -111,22 +101,60 @@ interface Message {
   content: string;
   image?: string;
   timestamp: Date;
+  delivered?: boolean;
 }
 
 export default function App() {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [vouchers, setVouchers] = useState<Voucher[]>([]);
-  const [ledgers, setLedgers] = useState<Ledger[]>([]);
-  
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      role: 'assistant',
-      content: 'नमस्ते! मैं आपका Accounting Assistant हूँ। आप मुझे कोई भी transaction बता सकते हैं, और मैं उसे record कर दूँगा।\n\nउदाहरण के लिए: "Spent 500 on dinner with clients"\n\n**Tip:** Dashboard चेक करें अपनी Financial Health देखने के लिए!',
-      timestamp: new Date(),
+  const [user, setUser] = useState<{ displayName: string; email: string; photoURL?: string; uid: string } | null>({
+    displayName: 'Professional Accountant',
+    email: 'accountant@enterprise.ai',
+    uid: 'local-user-001'
+  });
+  const [vouchers, setVouchers] = useState<Voucher[]>(() => {
+    const saved = localStorage.getItem('tally-vouchers');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [ledgers, setLedgers] = useState<Ledger[]>(() => {
+    const saved = localStorage.getItem('tally-ledgers');
+    if (saved) return JSON.parse(saved);
+    
+    // Default ledgers
+    return [
+      { id: 'l1', name: 'Cash', group: 'Assets', currentBalance: 50000 },
+      { id: 'l2', name: 'Bank', group: 'Assets', currentBalance: 250000 },
+      { id: 'l3', name: 'Sales', group: 'Revenue', currentBalance: 0 },
+      { id: 'l4', name: 'Rent', group: 'Expenses', currentBalance: 0 },
+      { id: 'l5', name: 'Office Supplies', group: 'Expenses', currentBalance: 0 }
+    ];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('tally-vouchers', JSON.stringify(vouchers));
+  }, [vouchers]);
+
+  useEffect(() => {
+    localStorage.setItem('tally-ledgers', JSON.stringify(ledgers));
+  }, [ledgers]);
+
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const saved = localStorage.getItem('tally-messages');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }));
     }
-  ]);
+    return [
+      {
+        id: '1',
+        role: 'assistant',
+        content: 'नमस्ते! मैं आपका Accounting Assistant हूँ। आप मुझे कोई भी transaction बता सकते हैं, और मैं उसे record कर दूँगा।\n\nउदाहरण के लिए: "Spent 500 on dinner with clients"\n\n**Tip:** Dashboard चेक करें अपनी Financial Health देखने के लिए!',
+        timestamp: new Date(),
+      }
+    ];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('tally-messages', JSON.stringify(messages));
+  }, [messages]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -136,132 +164,43 @@ export default function App() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [collapsedMessages, setCollapsedMessages] = useState<Set<string>>(new Set());
 
-  // Firebase Auth Listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthReady(true);
-      if (u) {
-        // Create user doc if not exists
-        const userRef = doc(db, 'users', u.uid);
-        getDoc(userRef).then((snap) => {
-          if (!snap.exists()) {
-            setDoc(userRef, {
-              uid: u.uid,
-              displayName: u.displayName,
-              email: u.email,
-              createdAt: serverTimestamp()
-            });
-            // Bootstrap default ledgers
-            const ledgersToCreate = [
-              { name: 'Cash', group: 'Assets', subGroup: 'Cash-in-hand', openingBalance: 0 },
-              { name: 'Bank', group: 'Assets', subGroup: 'Bank Accounts', openingBalance: 0 },
-              { name: 'Sales', group: 'Revenue', subGroup: 'Sales Accounts', openingBalance: 0 },
-              { name: 'Rent', group: 'Expenses', subGroup: 'Indirect Expenses', openingBalance: 0 },
-              { name: 'Office Supplies', group: 'Expenses', subGroup: 'Indirect Expenses', openingBalance: 0 }
-            ];
-            ledgersToCreate.forEach(l => {
-              addDoc(collection(db, `users/${u.uid}/ledgers`), {
-                ...l,
-                currentBalance: l.openingBalance,
-                createdBy: u.uid
-              });
-            });
-          }
-        });
-      }
-    });
-    return () => unsubscribe();
-  }, []);
+  const handleLogout = () => {
+    setUser(null);
+    toast.success('Logged out (Local Session)');
+  };
 
-  // Firestore Sync - Vouchers & Ledgers
-  useEffect(() => {
-    if (!user) return;
-
-    const vQuery = query(collection(db, `users/${user.uid}/vouchers`), orderBy('date', 'desc'));
-    const unsubscribeV = onSnapshot(vQuery, (snap) => {
-      setVouchers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Voucher)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/vouchers`));
-
-    const lQuery = query(collection(db, `users/${user.uid}/ledgers`));
-    const unsubscribeL = onSnapshot(lQuery, (snap) => {
-      setLedgers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Ledger)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/ledgers`));
-
-    return () => {
-      unsubscribeV();
-      unsubscribeL();
+  const recordVoucher = (vData: Partial<Voucher>) => {
+    const newVoucher: Voucher = {
+      ...vData as Voucher,
+      id: Date.now().toString(),
+      date: new Date(),
+      createdBy: user?.uid || 'guest'
     };
-  }, [user]);
 
-  const handleLogin = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (err) {
-      toast.error('Login failed');
-    }
-  };
+    setVouchers(prev => [newVoucher, ...prev]);
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setVouchers([]);
-      setLedgers([]);
-    } catch (err) {
-      toast.error('Logout failed');
-    }
-  };
-
-  const recordVoucher = async (vData: Partial<Voucher>) => {
-    if (!user) return;
-    try {
-      await runTransaction(db, async (transaction) => {
-        // 1. Add the voucher
-        const newVoucherRef = doc(collection(db, `users/${user.uid}/vouchers`));
-        transaction.set(newVoucherRef, {
-          ...vData,
-          date: serverTimestamp(),
-          createdBy: user.uid
-        });
-
-        // 2. Update each involved ledger's balance
-        if (vData.entries) {
-          for (const entry of vData.entries) {
-            // Find the ledger by name (or we could use IDs if we had them)
-            const ledgerQuery = query(
-              collection(db, `users/${user.uid}/ledgers`), 
-              where('name', '==', entry.ledgerName)
-            );
-            // Since we're in a transaction, we need to use 'get' for query isn't directly supported in many transaction wrappers
-            // But Firestore transactions require specific document references.
-            // Simplified approach for now: find matching ledger in local state and use its ID
-            const targetLedger = ledgers.find(l => l.name === entry.ledgerName);
-            if (targetLedger) {
-              const ledgerRef = doc(db, `users/${user.uid}/ledgers`, targetLedger.id);
-              const ledgerSnapshot = await transaction.get(ledgerRef);
-              if (ledgerSnapshot.exists()) {
-                const currentBalance = ledgerSnapshot.data().currentBalance || 0;
-                let newBalance = currentBalance;
-                
-                // Group logic: Assets/Expenses increase with DR
-                const isAssetOrExpense = ['Assets', 'Expenses'].includes(targetLedger.group);
-                if (entry.entryType === 'DR') {
-                  newBalance += isAssetOrExpense ? entry.amount : -entry.amount;
-                } else {
-                  newBalance += isAssetOrExpense ? -entry.amount : entry.amount;
-                }
-                
-                transaction.update(ledgerRef, { currentBalance: newBalance });
-              }
+    // Update ledgers
+    if (vData.entries) {
+      setLedgers(prevLedgers => {
+        return prevLedgers.map(l => {
+          const matchingEntry = vData.entries?.find(e => e.ledgerName === l.name);
+          if (matchingEntry) {
+            let newBalance = l.currentBalance;
+            const isAssetOrExpense = ['Assets', 'Expenses'].includes(l.group);
+            
+            if (matchingEntry.entryType === 'DR') {
+              newBalance += isAssetOrExpense ? matchingEntry.amount : -matchingEntry.amount;
+            } else {
+              newBalance += isAssetOrExpense ? -matchingEntry.amount : matchingEntry.amount;
             }
+            return { ...l, currentBalance: newBalance };
           }
-        }
+          return l;
+        });
       });
-      toast.success(`${vData.type} recorded successfully`);
-    } catch (err) {
-      console.error("Voucher recording failed:", err);
-      toast.error("Failed to record transaction properly.");
     }
+    
+    toast.success(`${vData.type} recorded locally`);
   };
 
   const toggleCollapse = (id: string) => {
@@ -459,6 +398,30 @@ export default function App() {
   };
 
   const stats = useMemo(() => {
+    const now = new Date();
+    const sixMonthsAgo = subMonths(now, 5);
+    
+    // Monthly data for chart
+    const monthlyDataMap = new Map();
+    for(let i = 0; i < 6; i++) {
+      const month = format(subMonths(now, i), 'MMM');
+      monthlyDataMap.set(month, { month, revenue: 0, expenses: 0 });
+    }
+
+    vouchers.forEach(v => {
+      if (!v.date) return;
+      const vDate = new Date(v.date);
+      const monthKey = format(vDate, 'MMM');
+      
+      if (monthlyDataMap.has(monthKey)) {
+        const current = monthlyDataMap.get(monthKey);
+        if (v.type === 'Sales') current.revenue += v.totalAmount;
+        if (v.type === 'Payment' || v.type === 'Purchase') current.expenses += v.totalAmount;
+      }
+    });
+
+    const chartData = Array.from(monthlyDataMap.values()).reverse();
+
     const totalCash = vouchers.filter(v => v.type === 'Receipt').reduce((acc, v) => acc + v.totalAmount, 0) - 
                       vouchers.filter(v => v.type === 'Payment').reduce((acc, v) => acc + v.totalAmount, 0);
     const totalRevenue = vouchers.filter(v => v.type === 'Sales').reduce((acc, v) => acc + v.totalAmount, 0);
@@ -468,52 +431,21 @@ export default function App() {
       balance: totalCash,
       revenue: totalRevenue,
       expenses: totalExpenses,
-      recentCount: vouchers.length
+      recentCount: vouchers.length,
+      chartData
     };
   }, [vouchers]);
 
-  if (!authReady) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-bg-main">
-        <Loader2 className="w-12 h-12 animate-spin text-tally-green" />
-      </div>
-    );
-  }
-
   if (!user) {
     return (
-      <div className="flex h-screen items-center justify-center bg-bg-main p-6">
-        <Card className="w-full max-w-md shadow-2xl border-4 border-tally-green">
-          <CardHeader className="text-center bg-tally-green text-white pb-8">
-            <Calculator className="w-16 h-16 mx-auto mb-4 text-accent-green" />
-            <CardTitle className="text-3xl font-black tracking-tighter uppercase">Accounting Assistant</CardTitle>
-            <CardDescription className="text-white/80 font-bold uppercase tracking-widest text-[10px]">Your professional bookkeeping companion</CardDescription>
-          </CardHeader>
-          <CardContent className="p-8 space-y-6">
-            <div className="space-y-4">
-              <p className="text-center text-sm text-text-muted font-medium italic">
-                Securely manage your ledgers, track vouchers, and generate real-time reports with AI assistance.
-              </p>
-              <Button 
-                onClick={handleLogin} 
-                className="w-full h-14 bg-white hover:bg-gray-50 text-slate-900 border-2 border-slate-200 shadow-sm flex items-center justify-center gap-4 text-sm font-bold transition-all active:scale-[0.98]"
-              >
-                <div className="bg-white p-2 rounded-full border border-gray-100 shadow-sm">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.66l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                  </svg>
-                </div>
-                Sign in with Google Account
-              </Button>
-            </div>
-            <div className="text-center text-[10px] text-text-muted/60 uppercase font-bold tracking-widest">
-              Secured by Firebase Authentication
-            </div>
-          </CardContent>
-        </Card>
+      <div className="flex h-screen items-center justify-center bg-background p-6">
+        <Button onClick={() => setUser({
+          displayName: 'Professional Accountant',
+          email: 'accountant@enterprise.ai',
+          uid: 'local-user-001'
+        })}>
+          Restart Local Session
+        </Button>
       </div>
     );
   }
@@ -580,138 +512,107 @@ export default function App() {
       </AnimatePresence>
 
       <aside className={cn(
-        "bg-card border-r border-border flex flex-col transition-all duration-300 z-[110] shadow-2xl overflow-hidden shadow-[10px_0_30px_rgba(0,0,0,0.1)]",
-        "fixed inset-y-0 left-0 w-[85%] sm:w-72 md:relative md:w-72 md:translate-x-0 h-full",
+        "bg-card border-r border-border/40 flex flex-col transition-all duration-300 z-[110] shadow-[10px_0_40px_rgba(0,0,0,0.02)]",
+        "fixed inset-y-0 left-0 w-[85%] sm:w-80 md:relative md:w-80 md:translate-x-0 h-full",
         isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
       )}>
-        <div className="p-6 border-b border-border-theme bg-tally-green text-white shrink-0">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Calculator className="w-8 h-8 text-accent-green" />
-              <h1 className="font-bold text-xl tracking-wider uppercase">Tally AI</h1>
+        <div className="p-8 border-b border-border/40 shrink-0">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-primary rounded-[18px] flex items-center justify-center shadow-xl shadow-tally-green/20 relative overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <Calculator className="w-6 h-6 text-accent-green" />
             </div>
-            <Button 
-              variant="ghost" 
-              size="icon" 
-              className="md:hidden text-white"
-              onClick={() => setIsSidebarOpen(false)}
-            >
-              <Menu className="w-6 h-6" />
-            </Button>
+            <div className="flex flex-col">
+              <h1 className="font-black text-xl tracking-tighter uppercase serif-display leading-none">Accountant</h1>
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <Badge variant="outline" className="text-[8px] px-1.5 py-0 h-4 border-tally-green/30 text-tally-green font-black tracking-widest uppercase bg-tally-green/5">Enterprise AI</Badge>
+              </div>
+            </div>
           </div>
-          <p className="text-[10px] text-white/70 mt-1 uppercase tracking-widest font-bold">Accounting Companion</p>
         </div>
         
-        <ScrollArea className="flex-1 px-4 py-4">
-          <div className="space-y-8">
+        <ScrollArea className="flex-1 px-4 py-8">
+          <div className="space-y-12">
             <div>
-              <h2 className="card-title-bar px-2 mb-3">Accounting Menu</h2>
-              <div className="space-y-1.5 px-1">
-                <Button 
-                  variant="ghost" 
-                  className={cn(
-                    "w-full justify-start gap-3 h-11 px-3 font-black text-[11px] uppercase tracking-wider transition-all duration-200 rounded-md hover:bg-bg-main", 
-                    activeTab === 'chat' ? "bg-bg-main text-tally-green border-r-4 border-tally-green shadow-sm" : "text-text-muted"
-                  )}
-                  onClick={() => {
-                    setActiveTab('chat');
-                    if (window.innerWidth < 768) setIsSidebarOpen(false);
-                  }}
-                >
-                  <MessageSquare className="w-4 h-4" /> Transactions
-                </Button>
-                <Button 
-                  variant="ghost" 
-                  className={cn(
-                    "w-full justify-start gap-3 h-11 px-3 font-black text-[11px] uppercase tracking-wider transition-all duration-200 rounded-md hover:bg-bg-main", 
-                    activeTab === 'simulate' ? "bg-bg-main text-tally-green border-r-4 border-tally-green shadow-sm" : "text-text-muted"
-                  )}
-                  onClick={() => {
-                    setActiveTab('simulate');
-                    if (window.innerWidth < 768) setIsSidebarOpen(false);
-                  }}
-                >
-                  <LayoutDashboard className="w-4 h-4" /> Simulation View
-                </Button>
-                <Button 
-                  variant="ghost" 
-                  className={cn(
-                    "w-full justify-start gap-3 h-11 px-3 font-black text-[11px] uppercase tracking-wider transition-all duration-200 rounded-md hover:bg-bg-main", 
-                    learningMode ? "text-tally-green bg-green-50" : "text-text-muted"
-                  )}
-                  onClick={() => setLearningMode(!learningMode)}
-                >
-                  <GraduationCap className={cn("w-4 h-4", learningMode && "animate-bounce")} /> Learning Mode: {learningMode ? 'ON' : 'OFF'}
-                </Button>
+              <h2 className="px-5 mb-5 text-[10px] font-black uppercase tracking-[0.35em] text-slate-400">Navigation</h2>
+              <div className="space-y-1 px-2">
+                {[
+                  { id: 'chat', label: 'AI Assistant', icon: MessageSquare, desc: 'Analyze & Record' },
+                  { id: 'dashboard', label: 'Financial Hub', icon: LayoutDashboard, desc: 'Real-time Reports' },
+                  { id: 'simulate', label: 'Tally Simulator', icon: Monitor, desc: 'Software Training' },
+                ].map((item) => (
+                  <Button 
+                    key={item.id}
+                    variant="ghost" 
+                    className={cn(
+                      "w-full justify-start gap-4 h-16 px-5 transition-all duration-300 rounded-2xl group relative overflow-hidden", 
+                      activeTab === item.id 
+                        ? "bg-slate-900 text-white shadow-2xl shadow-slate-900/10" 
+                        : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                    )}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      if (window.innerWidth < 768) setIsSidebarOpen(false);
+                    }}
+                  >
+                    <item.icon className={cn("w-5 h-5 transition-transform duration-500", activeTab === item.id ? "scale-110 text-accent-green" : "group-hover:scale-110")} /> 
+                    <div className="flex flex-col items-start transition-transform duration-300 group-hover:translate-x-1">
+                      <span className="font-black text-[12px] uppercase tracking-wide">{item.label}</span>
+                      <span className={cn("text-[9px] font-medium tracking-tight opacity-50", activeTab === item.id ? "text-accent-green/80" : "")}>{item.desc}</span>
+                    </div>
+                  </Button>
+                ))}
               </div>
             </div>
 
-            <div>
-              <h2 className="card-title-bar px-2 mb-3">Recent Vouchers</h2>
-              <div className="space-y-2 px-3">
-                {messages.filter(m => m.role === 'user').slice(-5).map(m => (
-                  <div key={m.id} className="text-[12px] text-text-muted truncate hover:text-tally-green cursor-pointer transition-colors flex items-center gap-3 font-bold group">
-                    <FileText className="w-3.5 h-3.5 opacity-40 group-hover:opacity-100 group-hover:text-tally-green transition-all" />
-                    <span className="truncate">{m.content || "Image Voucher"}</span>
-                  </div>
-                ))}
-                {messages.filter(m => m.role === 'user').length === 0 && (
-                  <div className="text-[11px] text-text-muted/50 italic px-2">No recent entries</div>
-                )}
+            <div className="px-4">
+              <div className="pro-card p-6 bg-slate-950 border-none relative overflow-hidden group">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-tally-green/10 rounded-full -mr-16 -mt-16 blur-2xl group-hover:scale-150 transition-transform duration-1000" />
+                <GraduationCap className={cn("w-10 h-10 mb-5 text-accent-green transition-bounce", learningMode && "animate-bounce")} />
+                <h3 className="text-white font-black text-xs uppercase tracking-widest mb-2">Learning Mode</h3>
+                <p className="text-white/40 text-[10px] leading-relaxed mb-6 font-medium">Master professional accounting with expert AI guidance for every transaction.</p>
+                
+                <div 
+                  onClick={() => setLearningMode(!learningMode)}
+                  className={cn(
+                    "w-14 h-7 rounded-full relative cursor-pointer transition-all duration-300",
+                    learningMode ? "bg-accent-green shadow-[0_0_15px_rgba(0,130,80,0.4)]" : "bg-slate-800"
+                  )}
+                >
+                  <motion.div 
+                    animate={{ x: learningMode ? 30 : 4 }}
+                    className="absolute top-1.5 w-4 h-4 bg-white rounded-full shadow-lg" 
+                  />
+                </div>
               </div>
             </div>
           </div>
         </ScrollArea>
 
-        <div className="p-4 border-t border-border-theme space-y-1 bg-gray-50/50">
+        <div className="p-6 border-t border-border/40 space-y-6">
           {user && (
-            <div className="flex items-center gap-3 p-3 mb-2 bg-white rounded-lg border border-slate-200">
-              <div className="w-8 h-8 rounded-full bg-tally-green flex items-center justify-center text-white font-black text-xs uppercase shadow-sm">
-                {user.displayName?.[0] || 'U'}
+            <div className="flex items-center gap-4 p-4 pro-card bg-slate-50/50 dark:bg-slate-800/20 border-border/20">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-tally-green to-accent-green flex items-center justify-center text-white font-black text-sm uppercase shadow-xl shadow-tally-green/10 overflow-hidden border border-white/20">
+                {user.photoURL ? <img src={user.photoURL} alt="" className="w-full h-full object-cover" /> : user.displayName?.[0] || 'U'}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-[11px] font-black text-slate-800 truncate uppercase leading-none">{user.displayName}</div>
-                <div className="text-[9px] font-bold text-slate-400 truncate tracking-widest mt-1">{user.email}</div>
+                <div className="text-[12px] font-black text-slate-900 dark:text-white truncate uppercase tracking-tighter leading-none">{user.displayName}</div>
+                <div className="text-[9px] font-bold text-slate-400 truncate tracking-widest mt-1.5 opacity-70 italic">{user.email}</div>
               </div>
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600" onClick={handleLogout}>
+              <Button variant="ghost" size="icon" className="h-10 w-10 text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all rounded-xl" onClick={handleLogout}>
                 <LogOut className="w-4 h-4" />
               </Button>
             </div>
           )}
-          <Button 
-            variant="ghost" 
-            className="w-full justify-start gap-3 h-10 text-text-muted text-[10px] font-black uppercase tracking-widest hover:text-red-600 transition-colors" 
-            onClick={clearHistory}
-          >
-            <Trash2 className="w-4 h-4" /> Reset History
-          </Button>
-          <Button 
-            variant="ghost" 
-            className="w-full justify-start gap-3 h-10 text-text-muted text-[10px] font-black uppercase tracking-widest hover:text-tally-green transition-colors"
-          >
-            <Settings className="w-4 h-4" /> AI Preferences
-          </Button>
-          <Button 
-            variant="outline" 
-            className="w-full justify-start gap-3 h-11 mt-2 text-[11px] font-black uppercase tracking-widest bg-white dark:bg-slate-800 border-2 border-tally-green/10 hover:border-tally-green hover:text-tally-green transition-all active:scale-95 shadow-sm"
-            onClick={() => setShowShortcuts(true)}
-          >
-            <Keyboard className="w-4 h-4" /> Tally Keys
-          </Button>
-
-          <Button 
-            variant="ghost" 
-            className="w-full justify-between items-center h-10 px-3 mt-2 text-text-muted text-[10px] font-black uppercase tracking-widest hover:bg-bg-main"
-            onClick={() => setDarkMode(!darkMode)}
-          >
-            <div className="flex items-center gap-3">
-              {darkMode ? <Sun className="w-4 h-4 text-yellow-500" /> : <Moon className="w-4 h-4 text-blue-500" />}
-              {darkMode ? 'Light Mode' : 'Dark Mode'}
-            </div>
-            <div className={cn("w-8 h-4 rounded-full relative transition-colors", darkMode ? "bg-tally-green" : "bg-slate-300 dark:bg-slate-600")}>
-              <div className={cn("absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all shadow-md", darkMode ? "left-[18px]" : "left-0.5")} />
-            </div>
-          </Button>
+          
+          <div className="grid grid-cols-2 gap-3">
+            <Button variant="outline" size="sm" onClick={() => setDarkMode(!darkMode)} className="h-11 rounded-2xl gap-2 font-black text-[9px] uppercase tracking-widest border-border/40 hover:bg-slate-50 dark:hover:bg-slate-800">
+              {darkMode ? <Sun className="w-4 h-4 text-orange-400" /> : <Moon className="w-4 h-4 text-blue-400" />} {darkMode ? 'Day' : 'Night'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setMessages([messages[0]])} className="h-11 rounded-2xl gap-2 font-black text-[9px] uppercase tracking-widest border-border/40 text-red-400 hover:text-red-500 hover:bg-red-50 hover:border-red-100">
+              <Trash2 className="w-4 h-4" /> Reset
+            </Button>
+          </div>
         </div>
       </aside>
 
@@ -759,94 +660,136 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 bg-bg-main overflow-hidden">
-        {/* Header - Geometric Balance: Green with accent border */}
-        <header className="shrink-0 h-14 md:h-16 bg-tally-green border-b-4 border-accent-green flex items-center justify-between px-3 md:px-6 z-20 text-white shadow-md">
-          <div className="flex items-center gap-2 md:gap-3">
+        {/* Header - Enterprise Standard */}
+        <header className="shrink-0 h-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-border/40 flex items-center justify-between px-6 md:px-12 z-[100] shadow-[0_1px_10px_rgba(0,0,0,0.02)]">
+          <div className="flex items-center gap-6">
             <Button 
               variant="ghost" 
               size="icon" 
-              className="text-white hover:bg-white/10 h-9 w-9"
+              className="md:hidden h-12 w-12 rounded-2xl bg-slate-50 dark:bg-slate-800"
               onClick={() => setIsSidebarOpen(true)}
             >
-              <Menu className="w-5 h-5 md:w-6 md:h-6" />
+              <Menu className="w-5 h-5" />
             </Button>
             <div className="flex flex-col">
-              <h2 className="font-bold text-sm md:text-lg leading-none tracking-wide uppercase">Tally AI</h2>
-              <div className="flex items-center gap-1 mt-0.5 md:mt-1">
-                <span className="w-1.5 h-1.5 bg-accent-green rounded-full animate-pulse" />
-                <span className="text-[8px] md:text-[10px] text-white/80 font-bold uppercase tracking-widest">Live</span>
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] font-black uppercase tracking-[0.3em] text-tally-green">Active Session</span>
+                <div className="w-1.5 h-1.5 bg-accent-green rounded-full animate-pulse shadow-[0_0_8px_rgba(0,130,80,0.5)]" />
               </div>
+              <h2 className="font-black text-xl tracking-tighter uppercase serif-display mt-0.5">
+                {activeTab === 'chat' ? 'Transaction Intelligence' : activeTab === 'dashboard' ? 'Portfolio Analytics' : 'Terminal Simulation'}
+              </h2>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="flex">
-                <TabsList className="bg-black/30 p-0.5 h-8 md:h-9 border border-white/10">
-                  <TabsTrigger value="chat" className="rounded-sm px-2.5 md:px-4 text-[10px] md:text-xs font-black uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:text-tally-green transition-all">CHAT</TabsTrigger>
-                  <TabsTrigger value="dashboard" className="rounded-sm px-2.5 md:px-4 text-[10px] md:text-xs font-black uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:text-tally-green transition-all">DASHBOARD</TabsTrigger>
-                  <TabsTrigger value="simulate" className="rounded-sm px-2.5 md:px-4 text-[10px] md:text-xs font-black uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:text-tally-green transition-all">SIM</TabsTrigger>
-                </TabsList>
-              </Tabs>
+
+          <div className="hidden md:flex items-center gap-1 bg-slate-100/50 dark:bg-slate-800/50 p-1.5 rounded-2xl border border-border/40">
+            {[
+              { id: 'chat', label: 'Analysis' },
+              { id: 'dashboard', label: 'Reports' },
+              { id: 'simulate', label: 'Terminal' }
+            ].map((tab) => (
+              <Button
+                key={tab.id}
+                variant="ghost"
+                onClick={() => setActiveTab(tab.id as any)}
+                className={cn(
+                  "h-9 px-6 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                  activeTab === tab.id 
+                    ? "bg-white dark:bg-slate-900 text-tally-green shadow-xl shadow-slate-900/5 border border-border/20" 
+                    : "text-slate-400 hover:text-slate-600"
+                )}
+              >
+                {tab.label}
+              </Button>
+            ))}
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <div className="hidden sm:flex flex-col items-end mr-3">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Local Engine</span>
+              <span className="text-[10px] font-bold text-slate-900 dark:text-white uppercase tracking-tighter">Status: Standalone</span>
+            </div>
+            <div className="w-10 h-10 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center border border-border/50">
+              <ShieldCheck className="w-5 h-5 text-tally-green" />
+            </div>
           </div>
         </header>
 
         {/* Content Area */}
-        <div className="flex-1 relative overflow-hidden flex flex-col">
+        <div className="flex-1 relative overflow-hidden flex flex-col bg-slate-50/30 dark:bg-slate-950/30">
           <AnimatePresence mode="wait">
             {activeTab === 'chat' && (
               <motion.div 
                 key="chat"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="h-full flex flex-col"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="h-full flex flex-col relative"
               >
-                <ScrollArea ref={scrollAreaRef} className="flex-1 relative group bg-bg-main overflow-hidden">
-                  <div className="max-w-4xl mx-auto space-y-4 md:space-y-8 p-4 md:p-8 pb-48 md:pb-32">
-                    {messages.map((message, index) => {
-                      console.log(`Rendering message ${index}:`, message.role, "Length:", message.content.length);
-                      return (
-                        <motion.div
+                <div className="absolute inset-0 pointer-events-none overflow-hidden h-full w-full">
+                  <div className="absolute top-[10%] left-[5%] w-[30%] h-[30%] bg-tally-green/5 blur-[120px] rounded-full" />
+                  <div className="absolute bottom-[20%] right-[5%] w-[25%] h-[25%] bg-accent-green/5 blur-[100px] rounded-full" />
+                </div>
+
+                <ScrollArea ref={scrollAreaRef} className="flex-1 relative group overflow-hidden">
+                  <div className="max-w-4xl mx-auto space-y-12 p-6 md:p-12 pb-48 md:pb-40">
+                    {messages.map((message, index) => (
+                      <motion.div
                         key={message.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
+                        initial={{ opacity: 0, y: 20 }}
+                        whileInView={{ opacity: 1, y: 0 }}
+                        viewport={{ once: true }}
                         className={cn(
-                          "w-full flex flex-col",
+                          "w-full flex flex-col relative",
                           message.role === 'user' ? "items-end" : "items-start"
                         )}
                       >
                         <div className={cn(
-                          "max-w-[100%] md:max-w-[90%] rounded-3xl px-4 py-4 md:px-6 md:py-6 shadow-md border group/bubble relative",
+                          "max-w-[100%] md:max-w-[85%] group/bubble relative pro-card p-6 md:p-10",
                           message.role === 'user' 
-                            ? "bg-card border-border text-foreground italic ml-auto rounded-tr-none shadow-sm" 
-                            : "bg-card border-border text-foreground mr-auto rounded-tl-none shadow-sm"
+                            ? "message-user border-none" 
+                            : "message-ai border border-slate-200/50 dark:border-slate-800"
                         )}>
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            className="absolute -top-3 right-4 h-6 w-6 rounded-full bg-background border shadow-sm opacity-0 group-hover/bubble:opacity-100 transition-opacity z-10"
+                            className="absolute -top-3 right-6 h-8 w-8 rounded-xl bg-white dark:bg-slate-800 border shadow-xl opacity-0 group-hover/bubble:opacity-100 transition-all z-10 hover:scale-110 active:scale-95"
                             onClick={() => toggleCollapse(message.id)}
                           >
                             {collapsedMessages.has(message.id) ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
                           </Button>
+                          
                           {message.role === 'user' && (
-                            <div className="card-title-bar">User Input</div>
+                            <div className="flex items-center gap-3 mb-6 opacity-60">
+                              <User className="w-4 h-4" />
+                              <span className="text-[10px] font-black uppercase tracking-[0.2em]">Statement Analysis</span>
+                            </div>
                           )}
+
                           {message.role === 'assistant' && (
-                            <div className="flex items-center justify-between mb-3 md:mb-6 pb-2 md:pb-3 border-b-2 border-border/50">
-                              <div className="card-title-bar mb-0 border-none pb-0">Detailed Tally Analysis</div>
+                            <div className="flex items-center justify-between mb-8 pb-4 border-b border-slate-100 dark:border-slate-800 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-xl bg-tally-green overflow-hidden flex items-center justify-center p-1.5 shadow-lg shadow-tally-green/20">
+                                  <Calculator className="w-full h-full text-accent-green" />
+                                </div>
+                                <div className="flex flex-col">
+                                  <span className="text-[11px] font-black uppercase tracking-[0.15em] text-slate-800 dark:text-slate-200">Assistant Response</span>
+                                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Verified Calculation</span>
+                                </div>
+                              </div>
                               <div className="flex gap-2">
                                 <Button 
                                   variant="ghost" 
                                   size="icon" 
-                                  className="h-8 w-8 text-slate-400 hover:text-tally-green"
+                                  className="h-9 w-9 rounded-xl text-slate-400 hover:text-tally-green hover:bg-slate-50 transition-all"
                                   onClick={() => copyToClipboard(message.content, message.id)}
                                 >
-                                  {copiedId === message.id ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                                  {copiedId === message.id ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                                 </Button>
                                 <Button 
                                   variant="ghost" 
                                   size="icon" 
-                                  className="h-8 w-8 text-slate-400 hover:text-tally-green"
+                                  className="h-9 w-9 rounded-xl text-slate-400 hover:text-tally-green hover:bg-slate-50 transition-all"
                                   onClick={() => exportMessage(message.content)}
                                 >
                                   <Download className="w-4 h-4" />
@@ -854,112 +797,77 @@ export default function App() {
                               </div>
                             </div>
                           )}
+
                           <motion.div 
                             initial={false}
-                            animate={{ height: collapsedMessages.has(message.id) ? 60 : 'auto' }}
-                            className="overflow-hidden relative"
+                            animate={{ height: collapsedMessages.has(message.id) ? 80 : 'auto' }}
+                            className="overflow-hidden relative leading-relaxed"
                           >
                             {message.image && (
-                              <div className="mb-4">
-                                <div className="card-title-bar">Attached Voucher</div>
+                              <div className="mb-8 p-1 bg-slate-100 dark:bg-slate-800 rounded-3xl overflow-hidden shadow-inner border border-border/50">
                                 <img 
                                   src={message.image} 
                                   alt="Voucher" 
-                                  className="rounded-md max-h-80 object-cover border border-border-theme" 
+                                  className="rounded-[22px] w-full max-h-[500px] object-cover border border-white/10" 
                                   referrerPolicy="no-referrer"
                                 />
+                                <div className="p-4 text-[10px] uppercase font-black tracking-widest text-slate-400 text-center">Reference Document Scanning</div>
                               </div>
                             )}
-                            <div className="prose prose-sm max-w-none">
+                            <div className={cn(
+                              "prose prose-sm max-w-none dark:prose-invert",
+                              message.role === 'user' ? "font-serif text-lg leading-snug" : ""
+                            )}>
                               <ReactMarkdown 
                                 components={{
                                   h3: ({node, ...props}) => (
-                                    <h3 className="flex items-center gap-2 text-[11px] md:text-[12px] font-bold uppercase tracking-widest text-tally-green mt-4 md:mt-8 mb-2 md:mb-4 border-b border-tally-green/10 pb-2" {...props} />
+                                    <h3 className="flex items-center gap-3 text-[12px] font-black uppercase tracking-[0.2em] text-tally-green mt-10 mb-5 pb-3 border-b border-slate-100 dark:border-slate-800" {...props} />
                                   ),
-                                  ul: ({node, ...props}) => <ul className="list-none space-y-2 md:space-y-4 my-4 md:my-6 counter-reset-step" {...props} />,
+                                  ul: ({node, ...props}) => <ul className="list-none space-y-6 my-8 counter-reset-step" {...props} />,
                                   li: ({node, ...props}) => (
-                                    <li className="text-[13px] md:text-[14px] relative pl-8 md:pl-10 mb-2 md:mb-4 before:content-[counter(step)] before:counter-increment-step before:absolute before:left-0 before:top-0.5 before:w-6 before:h-6 md:w-7 md:h-7 before:bg-tally-green/10 before:border-2 before:border-tally-green before:text-tally-green before:rounded-sm before:flex before:items-center before:justify-center before:text-[10px] md:text-[11px] before:font-black before:shadow-[2px_2px_0_rgba(0,96,65,0.2)]" {...props} />
+                                    <li className="text-[14px] font-medium text-slate-700 dark:text-slate-300 relative pl-12 mb-6 before:content-[counter(step)] before:counter-increment-step before:absolute before:left-0 before:top-0 before:w-8 before:h-8 before:bg-slate-50 dark:before:bg-slate-800/50 before:border before:border-slate-100 dark:before:border-slate-700 before:text-tally-green before:rounded-xl before:flex before:items-center before:justify-center before:text-[11px] before:font-black before:shadow-sm" {...props} />
                                   ),
                                   p: ({node, ...props}) => {
                                     const childrenString = String(props.children || '');
-                                    if (childrenString.includes('Why this entry') || childrenString.includes('Why this is important')) {
+                                    if (childrenString.includes('Expert Insight')) {
                                       return (
-                                        <div className="learning-mode-box mt-6 border-l-4 border-tally-green bg-green-50/50">
-                                          <div className="flex items-center gap-2 mb-2">
-                                            <Lightbulb className="w-4 h-4 text-tally-green" />
-                                            <strong className="text-tally-green uppercase tracking-wider text-[11px]">Expert Insight</strong>
+                                        <div className="pro-card p-6 mt-10 bg-gradient-to-br from-green-50 to-white dark:from-slate-800/20 dark:to-slate-900 border-l-[6px] border-tally-green rounded-2xl shadow-sm">
+                                          <div className="flex items-center gap-3 mb-4">
+                                            <div className="w-8 h-8 rounded-full bg-tally-green/10 flex items-center justify-center">
+                                              <Lightbulb className="w-4 h-4 text-tally-green" />
+                                            </div>
+                                            <span className="text-[11px] font-black uppercase tracking-[0.15em] text-tally-green">Senior Auditor Review</span>
                                           </div>
-                                          <div className="text-[13px] leading-relaxed m-0 text-foreground/80">{props.children}</div>
+                                          <div className="text-[13px] leading-relaxed italic text-slate-600 dark:text-slate-400 font-medium">{props.children}</div>
                                         </div>
                                       );
                                     }
-                                    if (childrenString.includes('Important Notes for Beginners')) {
-                                      return (
-                                        <div className="mt-6 border-l-4 border-blue-500 bg-blue-500/10 p-5 rounded-r-lg shadow-sm">
-                                          <div className="flex items-center gap-2 mb-2">
-                                            <Info className="w-4 h-4 text-blue-500" />
-                                            <strong className="text-blue-500 uppercase tracking-wider text-[11px]">Beginner's Guide</strong>
-                                          </div>
-                                          <div className="text-[13px] leading-relaxed m-0 text-foreground/80">{props.children}</div>
-                                        </div>
-                                      );
-                                    }
-                                    return <p className="text-[16px] md:text-[18px] leading-[1.8] my-4 text-foreground/90 font-medium transition-colors" {...props} />;
-                                  },
-                                  strong: ({node, ...props}) => <strong className="font-bold text-tally-green" {...props} />,
-                                  table: ({node, ...props}) => (
-                                    <div className="overflow-x-auto my-6 rounded-lg border border-slate-200 shadow-sm">
-                                      <table className="w-full border-collapse bg-white dark:bg-slate-900" {...props} />
-                                    </div>
-                                  ),
-                                  th: ({node, ...props}) => <th className="text-left text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 p-3 border-b border-border font-bold bg-muted" {...props} />,
-                                  td: ({node, ...props}) => {
-                                    const content = props.children?.toString() || '';
-                                    if (content.toLowerCase() === 'debit') {
-                                      return <td className="p-3 border-b border-border text-sm font-bold text-green-700 bg-green-50/30">Debit</td>;
-                                    }
-                                    if (content.toLowerCase() === 'credit') {
-                                      return <td className="p-3 border-b border-border text-sm font-bold text-red-700 bg-red-50/30">Credit</td>;
-                                    }
-                                    return <td className="p-3 border-b border-border text-sm text-foreground/70" {...props} />;
-                                  },
-                                  code: ({node, ...props}) => <span className="path-display my-4 block">{props.children}</span>,
+                                    return <p className="m-0 leading-relaxed font-medium text-slate-600 dark:text-slate-400" {...props} />;
+                                  }
                                 }}
                               >
                                 {message.content}
                               </ReactMarkdown>
                             </div>
-                            {collapsedMessages.has(message.id) && (
-                              <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-card to-transparent pointer-events-none" />
-                            )}
                           </motion.div>
-                          
-                          <div className={cn(
-                            "flex items-center gap-1.5 mt-2",
-                            message.role === 'user' ? "justify-end" : "justify-start"
-                          )}>
-                            <span className="text-[10px] text-text-muted opacity-60">
-                              {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                            {message.role === 'user' && (
-                              <div className="flex items-center text-tally-green">
-                                <CheckCheck className="w-3.5 h-3.5" />
-                              </div>
-                            )}
-                          </div>
                         </div>
-                        </motion.div>
-                      );
-                    })}
+                        {message.role === 'user' && (
+                          <div className="mt-3 flex items-center gap-2 pr-2">
+                             <CheckCheck className={cn("w-3.5 h-3.5", message.delivered ? "text-tally-green" : "text-slate-300")} />
+                             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{format(new Date(), 'HH:mm')}</span>
+                          </div>
+                        )}
+                      </motion.div>
+                    ))}
                     <div ref={messagesEndRef} />
                     {isLoading && (
-                      <motion.div 
-                        initial={{ opacity: 0 }} 
-                        animate={{ opacity: 1 }} 
-                        className="flex items-center gap-2 text-tally-green text-sm font-bold uppercase tracking-widest"
-                      >
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Analyzing...
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-3">
+                        <div className="flex items-center gap-3">
+                           <div className="px-4 py-3 bg-white dark:bg-slate-900 pro-card flex items-center gap-3 shadow-xl">
+                              <Loader2 className="w-4 h-4 text-tally-green animate-spin" />
+                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Assistant is processing...</span>
+                           </div>
+                        </div>
                       </motion.div>
                     )}
                   </div>
@@ -970,146 +878,232 @@ export default function App() {
             {activeTab === 'dashboard' && (
               <motion.div
                 key="dashboard"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="h-full overflow-y-auto bg-bg-main p-4 md:p-8"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.02 }}
+                className="h-full overflow-y-auto p-4 md:p-10 space-y-10"
               >
-                <div className="max-w-6xl mx-auto space-y-8">
-                  <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                      <h2 className="text-2xl font-black text-slate-900 border-l-4 border-tally-green pl-4 uppercase tracking-tighter">Business Dashboard</h2>
-                      <p className="text-sm text-text-muted font-bold uppercase tracking-widest mt-1 opacity-60">Real-time Financial Snapshot</p>
+                <div className="max-w-7xl mx-auto space-y-10">
+                  <header className="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-6 border-b border-border/40">
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-6 bg-tally-green rounded-full" />
+                        <h2 className="text-4xl font-black text-slate-900 dark:text-white tracking-tighter uppercase serif-display">Financial Hub</h2>
+                      </div>
+                      <div className="flex items-center gap-3 text-slate-400 font-bold text-[10px] uppercase tracking-[0.2em] ml-5 italic">
+                        Real-time analytics & automated ledger summaries
+                      </div>
                     </div>
-                    <div className="flex items-center gap-4 bg-white p-2 rounded-lg shadow-sm border">
-                      <Calendar className="w-5 h-5 text-tally-green" />
-                      <span className="text-sm font-black text-slate-700">{format(new Date(), 'EEEE, do MMMM yyyy')}</span>
+                    <div className="flex items-center gap-4 bg-white dark:bg-slate-900 px-6 py-3 rounded-2xl shadow-sm border border-border/50">
+                      <Calendar className="w-4 h-4 text-tally-green" />
+                      <span className="text-xs font-black text-slate-600 dark:text-slate-300 uppercase tracking-widest">{format(new Date(), 'EEEE, MMMM do')}</span>
                     </div>
                   </header>
 
-                  {/* Stats Cards */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-                    <Card className="border-b-4 border-b-tally-green shadow-md hover:shadow-lg transition-shadow">
-                      <CardContent className="pt-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <Wallet className="w-6 h-6 text-tally-green" />
-                          <Badge variant="secondary" className="bg-green-50 text-tally-green text-[10px] font-black">LIQUIDITY</Badge>
+                  {/* Revenue Curve Chart */}
+                  <Card className="pro-card p-6 md:p-8 bg-white dark:bg-slate-900 border-none relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-tally-green/5 blur-[100px] pointer-events-none" />
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
+                      <div>
+                        <h3 className="text-xs font-black uppercase tracking-[0.3em] text-slate-400 mb-2">Performance Analytics</h3>
+                        <p className="text-2xl font-black serif-display text-slate-800 dark:text-white">Revenue vs Operating Payouts</p>
+                      </div>
+                      <div className="flex gap-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-4 h-4 rounded-full bg-tally-green shadow-lg shadow-tally-green/20" />
+                          <span className="text-[10px] font-black uppercase tracking-widest opacity-50 text-slate-500">Sales</span>
                         </div>
-                        <div className="text-3xl font-black text-slate-900">₹{stats.balance.toLocaleString()}</div>
-                        <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest mt-2">Cash & Bank Balance</p>
-                      </CardContent>
-                    </Card>
+                        <div className="flex items-center gap-3">
+                          <div className="w-4 h-4 rounded-full bg-orange-400 shadow-lg shadow-orange-400/20" />
+                          <span className="text-[10px] font-black uppercase tracking-widest opacity-50 text-slate-500">Expenses</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="h-[300px] w-full mt-4">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={stats.chartData}>
+                          <defs>
+                            <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#006041" stopOpacity={0.1}/>
+                              <stop offset="95%" stopColor="#006041" stopOpacity={0}/>
+                            </linearGradient>
+                            <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#fb923c" stopOpacity={0.1}/>
+                              <stop offset="95%" stopColor="#fb923c" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#00000008" />
+                          <XAxis 
+                            dataKey="month" 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fontSize: 10, fontWeight: 900, fill: '#94a3b8' }}
+                            dy={10}
+                          />
+                          <YAxis hide />
+                          <Tooltip 
+                            contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', background: '#fff' }}
+                            labelStyle={{ fontWeight: 900, fontSize: '10px', textTransform: 'uppercase', marginBottom: '8px' }}
+                          />
+                          <Area 
+                            type="monotone" 
+                            dataKey="revenue" 
+                            stroke="#006041" 
+                            strokeWidth={3}
+                            fillOpacity={1} 
+                            fill="url(#colorRevenue)" 
+                          />
+                          <Area 
+                            type="monotone" 
+                            dataKey="expenses" 
+                            stroke="#fb923c" 
+                            strokeWidth={3}
+                            fillOpacity={1} 
+                            fill="url(#colorExpenses)" 
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </Card>
 
-                    <Card className="border-b-4 border-b-blue-500 shadow-md hover:shadow-lg transition-shadow">
-                      <CardContent className="pt-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <TrendingUp className="w-6 h-6 text-blue-500" />
-                          <Badge variant="secondary" className="bg-blue-50 text-blue-500 text-[10px] font-black">REVENUE</Badge>
+                  {/* Summary Metric Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8">
+                    {[
+                      { label: 'Liquidity', val: `₹${stats.balance.toLocaleString()}`, icon: Wallet, color: 'emerald', sub: 'Calculated Cash & Bank' },
+                      { label: 'Revenue', val: `₹${stats.revenue.toLocaleString()}`, icon: TrendingUp, color: 'blue', sub: 'Monthly Gross Sales' },
+                      { label: 'Payouts', val: `₹${stats.expenses.toLocaleString()}`, icon: TrendingDown, color: 'orange', sub: 'Total Direct Expenses' },
+                      { label: 'Active Books', val: stats.recentCount, icon: BarChart3, color: 'slate', sub: 'Consolidated Vouchers' },
+                    ].map((stat) => (
+                      <Card key={stat.label} className="pro-card p-6 border-none group relative overflow-hidden bg-white dark:bg-slate-900 border-none shadow-sm hover:translate-y-[-4px]">
+                        <div className={cn("absolute inset-y-0 left-0 w-1", `bg-${stat.color}-500/50`)} />
+                        <div className="flex flex-col gap-4">
+                          <div className="flex items-center justify-between">
+                            <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shadow-inner", `bg-${stat.color}-500/10`)}>
+                              <stat.icon className={cn("w-5 h-5", `text-${stat.color}-500`)} />
+                            </div>
+                            <Badge variant="outline" className="text-[8px] font-black uppercase border-slate-100 dark:border-slate-800 tracking-widest opacity-50">{stat.label}</Badge>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-3xl font-black tracking-tighter serif-display mono-data leading-none">
+                              {stat.val}
+                            </div>
+                            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-2">{stat.sub}</div>
+                          </div>
                         </div>
-                        <div className="text-3xl font-black text-slate-900">₹{stats.revenue.toLocaleString()}</div>
-                        <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest mt-2">Total Sales (MTD)</p>
-                      </CardContent>
-                    </Card>
-
-                    <Card className="border-b-4 border-b-orange-500 shadow-md hover:shadow-lg transition-shadow">
-                      <CardContent className="pt-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <TrendingDown className="w-6 h-6 text-orange-500" />
-                          <Badge variant="secondary" className="bg-orange-50 text-orange-500 text-[10px] font-black">PAYOUTS</Badge>
-                        </div>
-                        <div className="text-3xl font-black text-slate-900">₹{stats.expenses.toLocaleString()}</div>
-                        <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest mt-2">Total Expenses (MTD)</p>
-                      </CardContent>
-                    </Card>
-
-                    <Card className="border-b-4 border-b-slate-400 shadow-md hover:shadow-lg transition-shadow">
-                      <CardContent className="pt-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <BarChart3 className="w-6 h-6 text-slate-400" />
-                          <Badge variant="secondary" className="bg-slate-50 text-slate-400 text-[10px] font-black">ACTIVITY</Badge>
-                        </div>
-                        <div className="text-3xl font-black text-slate-900">{stats.recentCount}</div>
-                        <p className="text-[10px] text-text-muted uppercase font-bold tracking-widest mt-2">Vouchers Recorded</p>
-                      </CardContent>
-                    </Card>
+                      </Card>
+                    ))}
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    {/* Recent Transactions Table */}
-                    <Card className="lg:col-span-2 shadow-xl border-none">
-                      <CardHeader className="bg-slate-900 text-white rounded-t-lg px-6 py-4">
-                        <div className="flex items-center justify-between">
-                          <CardTitle className="text-sm font-black uppercase tracking-widest">Recent Transactions</CardTitle>
-                          <Button variant="ghost" size="sm" className="text-white/60 hover:text-white hover:bg-white/10 text-[10px] uppercase font-bold">View Daybook</Button>
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+                    {/* Live Daybook */}
+                    <Card className="lg:col-span-8 pro-card overflow-hidden border-none shadow-xl bg-white dark:bg-slate-900">
+                      <div className="p-8 border-b border-border/30 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-slate-900 dark:bg-white flex items-center justify-center">
+                            <FileText className="w-4 h-4 text-white dark:text-slate-900" />
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-black uppercase tracking-widest text-slate-800 dark:text-slate-200">Live Daybook</h3>
+                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Automated Transaction Log</p>
+                          </div>
                         </div>
-                      </CardHeader>
-                      <CardContent className="p-0">
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse">
-                            <thead>
-                              <tr className="border-b bg-slate-50">
-                                <th className="p-4 text-[10px] uppercase font-black text-slate-500 tracking-widest">Date</th>
-                                <th className="p-4 text-[10px] uppercase font-black text-slate-500 tracking-widest">Voucher Type</th>
-                                <th className="p-4 text-[10px] uppercase font-black text-slate-500 tracking-widest">Narration</th>
-                                <th className="p-4 text-right text-[10px] uppercase font-black text-slate-500 tracking-widest">Amount</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {vouchers.slice(0, 10).map((v) => (
-                                <tr key={v.id} className="border-b hover:bg-slate-50 transition-colors group">
-                                  <td className="p-4 text-xs font-bold text-slate-600">
-                                    {v.date ? format(v.date.toDate(), 'dd MMM') : 'Just now'}
-                                  </td>
-                                  <td className="p-4">
-                                    <Badge className={cn(
-                                      "text-[10px] font-black uppercase tracking-widest",
-                                      v.type === 'Payment' ? "bg-orange-100 text-orange-700" :
-                                      v.type === 'Receipt' ? "bg-green-100 text-green-700" :
-                                      v.type === 'Sales' ? "bg-blue-100 text-blue-700" :
-                                      "bg-slate-100 text-slate-700"
-                                    )}>
-                                      {v.type}
-                                    </Badge>
-                                  </td>
-                                  <td className="p-4 text-xs font-medium text-slate-700 max-w-xs truncate italic">
+                        <Button variant="outline" size="sm" className="rounded-xl h-9 text-[10px] font-black uppercase tracking-widest border-border/50">Full Archive</Button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                          <thead>
+                            <tr className="bg-slate-50/30 dark:bg-slate-800/30">
+                              <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Timeline</th>
+                              <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Class</th>
+                              <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Narration</th>
+                              <th className="px-8 py-5 text-right text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Valuation</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {vouchers.slice(0, 10).map((v) => (
+                              <tr key={v.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors group">
+                                <td className="px-8 py-6">
+                                  <div className="text-[11px] font-black text-slate-900 dark:text-slate-300 mono-data uppercase">
+                                    {v.date ? format(new Date(v.date), 'dd MMM yyyy') : 'Pending Archive'}
+                                  </div>
+                                </td>
+                                <td className="px-8 py-6">
+                                  <Badge className={cn(
+                                    "text-[9px] px-2 py-0.5 h-auto font-black uppercase tracking-[0.1em] rounded-md border shadow-sm",
+                                    v.type === 'Payment' ? "bg-orange-50 text-orange-600 border-orange-200 shadow-orange-100" :
+                                    v.type === 'Receipt' ? "bg-green-50 text-green-600 border-green-200 shadow-green-100" :
+                                    v.type === 'Sales' ? "bg-blue-50 text-blue-600 border-blue-200 shadow-blue-100" :
+                                    "bg-slate-50 text-slate-600 border-slate-200 shadow-slate-100"
+                                  )}>
+                                    {v.type}
+                                  </Badge>
+                                </td>
+                                <td className="px-8 py-6">
+                                  <p className="text-[12px] font-medium text-slate-500 max-w-[240px] truncate italic leading-relaxed">
                                     "{v.narration}"
-                                  </td>
-                                  <td className="p-4 text-right text-xs font-black text-slate-900">
+                                  </p>
+                                </td>
+                                <td className="px-8 py-6 text-right">
+                                  <span className="text-[13px] font-black text-slate-900 dark:text-white mono-data italic">
                                     ₹{v.totalAmount.toLocaleString()}
-                                  </td>
-                                </tr>
-                              ))}
-                              {vouchers.length === 0 && (
-                                <tr>
-                                  <td colSpan={4} className="p-8 text-center text-sm text-text-muted italic">No transactions recorded yet. Ask the assistant to record one!</td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </CardContent>
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                            {vouchers.length === 0 && (
+                              <tr>
+                                <td colSpan={4} className="p-20 text-center">
+                                  <div className="flex flex-col items-center gap-4 opacity-30">
+                                    <Calculator className="w-12 h-12" />
+                                    <p className="text-xs font-black uppercase tracking-widest">No entries in the digital daybook</p>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </Card>
 
                     {/* Chart of Accounts Summary */}
-                    <Card className="shadow-xl border-none">
-                      <CardHeader className="bg-tally-green text-white rounded-t-lg px-6 py-4">
-                        <CardTitle className="text-sm font-black uppercase tracking-widest underline decoration-accent-green decoration-2 underline-offset-4">Chart of Accounts</CardTitle>
-                      </CardHeader>
-                      <CardContent className="p-4 bg-white">
-                        <div className="space-y-4">
-                          {ledgers.sort((a,b) => b.currentBalance - a.currentBalance).slice(0, 8).map(l => (
-                            <div key={l.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-100 hover:border-tally-green group transition-all">
-                              <div>
-                                <div className="text-[11px] font-black text-slate-800 uppercase tracking-tight">{l.name}</div>
-                                <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{l.group}</div>
+                    <Card className="lg:col-span-4 pro-card border-none shadow-xl bg-white dark:bg-slate-900 overflow-hidden">
+                      <div className="p-8 border-b border-border/30 bg-primary text-white">
+                        <div className="flex items-center gap-3">
+                          <History className="w-5 h-5 text-accent-green" />
+                          <h3 className="text-sm font-black uppercase tracking-widest">Liquidity Pool</h3>
+                        </div>
+                      </div>
+                      <ScrollArea className="h-[550px]">
+                        <div className="p-6 space-y-4">
+                          {ledgers.sort((a,b) => b.currentBalance - a.currentBalance).map(l => (
+                            <div key={l.id} className="pro-card p-5 border border-slate-100 dark:border-slate-800 hover:border-tally-green transition-all group/ledger cursor-default">
+                              <div className="flex items-center justify-between mb-3">
+                                <Badge variant="outline" className="text-[8px] font-black uppercase border-slate-100 dark:border-slate-800 h-4 tracking-widest">{l.group}</Badge>
+                                <span className={cn(
+                                  "text-[10px] font-black mono-data",
+                                  l.currentBalance >= 0 ? "text-green-500" : "text-red-500"
+                                )}>
+                                  {l.currentBalance >= 0 ? 'Surplus' : 'Deficit'}
+                                </span>
                               </div>
-                              <div className="text-sm font-black text-slate-900 italic">
-                                ₹{l.currentBalance.toLocaleString()}
+                              <div className="flex items-end justify-between">
+                                <span className="text-[12px] font-black text-slate-700 dark:text-slate-300 uppercase tracking-tight group-hover/ledger:text-tally-green transition-colors">{l.name}</span>
+                                <span className="text-lg font-black text-slate-900 dark:text-white serif-display tracking-tighter mono-data italic">
+                                  ₹{l.currentBalance.toLocaleString()}
+                                </span>
+                              </div>
+                              <div className="mt-3 h-1 w-full bg-slate-50 dark:bg-slate-800 rounded-full overflow-hidden">
+                                <motion.div 
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${Math.min(100, (Math.abs(l.currentBalance) / (stats.revenue || 1)) * 100)}%` }}
+                                  className="h-full bg-tally-green"
+                                />
                               </div>
                             </div>
                           ))}
                         </div>
-                      </CardContent>
+                      </ScrollArea>
                     </Card>
                   </div>
                 </div>
@@ -1400,95 +1394,101 @@ export default function App() {
           </AnimatePresence>
         </div>
 
-        {/* Input Area */}
-        <div className="shrink-0 p-2 md:p-8 bg-card border-t-2 border-border z-10 shadow-[0_-4px_12px_rgba(0,0,0,0.15)] theme-transition">
+        {/* Input Area - Floating Terminal Style */}
+        <div className="shrink-0 p-6 md:p-10 z-[110] relative">
           <div className="max-w-4xl mx-auto">
             {selectedImage && (
               <motion.div 
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="mb-3 relative inline-block"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-6 relative inline-block group"
               >
+                <div className="absolute -inset-2 bg-gradient-to-r from-tally-green to-accent-green rounded-[24px] blur opacity-25 group-hover:opacity-40 transition duration-1000" />
                 <img 
                   src={selectedImage} 
                   alt="Preview" 
-                  className="h-20 w-20 object-cover rounded-md border-2 border-tally-green shadow-md" 
+                  className="h-24 w-24 object-cover rounded-2xl border-2 border-white dark:border-slate-800 shadow-2xl relative" 
                   referrerPolicy="no-referrer"
                 />
                 <Button 
                   size="icon" 
                   variant="destructive" 
-                  className="absolute -top-2 -right-2 h-6 w-6 rounded-full shadow-md"
+                  className="absolute -top-3 -right-3 h-8 w-8 rounded-full shadow-2xl border-2 border-white dark:border-slate-900 transition-transform hover:scale-110 active:scale-90"
                   onClick={() => setSelectedImage(null)}
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-4 h-4" />
                 </Button>
               </motion.div>
             )}
             
-            <div className="flex flex-nowrap overflow-x-auto no-scrollbar gap-2 mb-4 justify-start pb-1">
+            <div className="flex flex-nowrap overflow-x-auto no-scrollbar gap-3 mb-6 justify-start pb-2">
               {['Paid 5000 Rent', 'Sold Goods 10000', 'Salary 25000', 'GST Report', 'Balance Sheet'].map((chip) => (
                 <button
                   key={chip}
                   onClick={() => setInput(chip)}
-                  className="text-[10px] font-bold uppercase tracking-widest px-3 py-2 bg-bg-main border border-border-theme rounded-md hover:border-tally-green hover:bg-tally-green hover:text-white transition-all active:scale-95 shrink-0 whitespace-nowrap"
+                  className="text-[9px] font-black uppercase tracking-[0.2em] px-5 py-2.5 bg-white dark:bg-slate-900 border border-border/40 rounded-xl hover:border-tally-green hover:bg-tally-green/5 hover:text-tally-green transition-all active:scale-95 shrink-0 whitespace-nowrap shadow-sm"
                 >
                   {chip}
                 </button>
               ))}
             </div>
             
-            <div className="relative flex items-center gap-1 md:gap-2 bg-muted rounded-md border-2 border-border p-1 md:p-1.5 pr-2 md:pr-4 shadow-inner">
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-                accept="image/*" 
-                onChange={handleImageUpload}
-              />
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="rounded-md text-text-muted hover:bg-bg-main h-8 w-8 md:h-10 md:w-10"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <ImageIcon className="w-4 h-4 md:w-5 md:h-5" />
-              </Button>
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className={cn("rounded-md h-8 w-8 md:h-10 md:w-10 hidden sm:flex", isListening ? "text-red-500 animate-pulse" : "text-text-muted")}
-                onClick={startListening}
-              >
-                <Mic className="w-4 h-4 md:w-5 md:h-5" />
-              </Button>
-              <Separator orientation="vertical" className="h-6 md:h-8 mx-0.5 md:mx-1" />
-              <Input 
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Describe transaction..." 
-                className="flex-1 border-none shadow-none focus-visible:ring-0 text-sm md:text-base placeholder:text-text-muted italic h-9 md:h-10 bg-transparent"
-              />
-              <Button 
-                size="sm"
-                className="bg-tally-green hover:bg-accent-green text-white font-bold uppercase tracking-wider px-3 md:px-6 h-8 md:h-9"
-                onClick={handleSend}
-                disabled={isLoading || (!input.trim() && !selectedImage)}
-              >
-                {isLoading ? <Loader2 className="w-3 h-3 md:w-4 md:h-4 animate-spin" /> : <Send className="w-3 h-3 md:w-4 md:h-4" />}
-                <span className="hidden sm:inline ml-2">Analyze</span>
-              </Button>
-            </div>
-            <div className="flex justify-center items-center gap-4 md:gap-12 mt-2 md:mt-8 pt-4 border-t border-border/20 relative overflow-hidden">
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-1 bg-tally-green/20 rounded-full" />
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-tally-green rotate-45" />
-                <p className="text-[8px] md:text-[10px] text-text-muted font-black uppercase tracking-[0.2em]">Geometric Balance</p>
+            <div className="relative group p-1 bg-white dark:bg-slate-900 rounded-[28px] shadow-[0_20px_50px_rgba(0,0,0,0.08)] border border-border/40 transition-all focus-within:shadow-[0_20px_70px_rgba(0,0,0,0.12)]">
+              <div className="flex items-center gap-1">
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  className="hidden" 
+                  accept="image/*" 
+                  onChange={handleImageUpload}
+                />
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="rounded-2xl text-slate-400 hover:text-tally-green hover:bg-slate-50 dark:hover:bg-slate-800 h-12 w-12 md:h-14 md:w-14"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Paperclip className="w-5 h-5" />
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className={cn("rounded-2xl h-12 w-12 md:h-14 md:w-14 hidden sm:flex transition-colors", isListening ? "text-red-500 bg-red-50 dark:bg-red-950 animate-pulse" : "text-slate-400 hover:text-tally-green hover:bg-slate-50 dark:hover:bg-slate-800")}
+                  onClick={startListening}
+                >
+                  <Mic className="w-5 h-5" />
+                </Button>
+                
+                <div className="w-px h-8 bg-slate-100 dark:bg-slate-800 mx-2" />
+                
+                <Input 
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                  placeholder="Ask your enterprise assistant anything..." 
+                  className="flex-1 border-none shadow-none focus-visible:ring-0 text-sm md:text-base placeholder:text-slate-300 font-medium h-12 md:h-14 bg-transparent pl-2"
+                />
+                
+                <Button 
+                  size="lg"
+                  className="bg-slate-900 dark:bg-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100 text-white font-black uppercase tracking-[0.15em] px-8 h-12 md:h-14 rounded-[22px] shadow-2xl transition-all hover:translate-x-1 active:scale-95 disabled:opacity-50"
+                  onClick={handleSend}
+                  disabled={isLoading || (!input.trim() && !selectedImage)}
+                >
+                  {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                  <span className="hidden md:inline ml-3 text-[11px]">Sync Now</span>
+                </Button>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-accent-green rotate-45 shadow-[2px_2px_0_rgba(0,130,80,0.2)]" />
-                <p className="text-[8px] md:text-[10px] text-text-muted font-black uppercase tracking-[0.2em]">Prime Mastery</p>
+            </div>
+            
+            <div className="flex justify-center items-center gap-12 mt-8 opacity-40">
+              <div className="flex items-center gap-3">
+                <div className="w-1.5 h-1.5 bg-tally-green rounded-full shadow-[0_0_8px_rgba(0,130,80,1)]" />
+                <p className="text-[8px] text-slate-400 font-black uppercase tracking-[0.3em]">End-to-End Encryption</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-1.5 h-1.5 bg-slate-300 rounded-full" />
+                <p className="text-[8px] text-slate-400 font-black uppercase tracking-[0.3em]">AI Model: Gemini 1.5 Pro</p>
               </div>
             </div>
           </div>
